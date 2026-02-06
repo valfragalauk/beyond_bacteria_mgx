@@ -1,0 +1,36 @@
+ >> Checking for Valid Options...
+ >> Running Bracken 
+      >> python src/est_abundance.py -i sample_results/minikraken_simulated.report -o sample_results/minikraken_simulated.bracken.S.tsv -k databases/minikraken/minikraken2_v2_8GB_201904_UPDATE/database150mers.kmer_distrib -l S -t 10
+PROGRAM START TIME: 02-04-2026 12:13:07
+BRACKEN SUMMARY (Kraken report: sample_results/minikraken_simulated.report)
+    >>> Threshold: 10 
+    >>> Number of species in sample: 3 
+	  >> Number of species with reads > threshold: 3 
+	  >> Number of species with reads < threshold: 0 
+    >>> Total reads in sample: 1000
+	  >> Total reads kept at species level (reads > threshold): 528
+	  >> Total reads discarded (species reads < threshold): 0
+	  >> Reads distributed: 0
+	  >> Reads not distributed (eg. no species above threshold): 0
+	  >> Unclassified reads: 472
+BRACKEN OUTPUT PRODUCED: sample_results/minikraken_simulated.bracken.S.tsv
+PROGRAM END TIME: 02-04-2026 12:13:08
+  Bracken complete.
+ >> Checking for Valid Options...
+ >> Running Bracken 
+      >> python src/est_abundance.py -i sample_results/minikraken_simulated.report -o sample_results/minikraken_simulated.bracken.G.tsv -k databases/minikraken/minikraken2_v2_8GB_201904_UPDATE/database150mers.kmer_distrib -l G -t 10
+PROGRAM START TIME: 02-04-2026 12:13:08
+BRACKEN SUMMARY (Kraken report: sample_results/minikraken_simulated.report)
+    >>> Threshold: 10 
+    >>> Number of genuses in sample: 2 
+	  >> Number of genuses with reads > threshold: 2 
+	  >> Number of genuses with reads < threshold: 0 
+    >>> Total reads in sample: 1000
+	  >> Total reads kept at genuses level (reads > threshold): 512
+	  >> Total reads discarded (genuses reads < threshold): 0
+	  >> Reads distributed: 16
+	  >> Reads not distributed (eg. no genuses above threshold): 0
+	  >> Unclassified reads: 472
+BRACKEN OUTPUT PRODUCED: sample_results/minikraken_simulated.bracken.G.tsv
+PROGRAM END TIME: 02-04-2026 12:13:08
+  Bracken complete.

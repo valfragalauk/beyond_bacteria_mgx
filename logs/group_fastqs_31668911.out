@@ -1,0 +1,7 @@
+=== GROUPING SUMMARY ===
+Samples in metadata:        87
+FASTQs found on disk:       111
+Samples with no FASTQs:     0
+Unused FASTQs:              24
+Grouped sample folders:     /scratch/prj/rosetree/Valentina/data/grouped_fastqs
+Reports written to:         /scratch/prj/rosetree/Valentina/data/grouped_fastqs_reports

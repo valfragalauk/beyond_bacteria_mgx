@@ -1,0 +1,6 @@
+/scratch/prj/rosetree/Valentina/scripts/grouping_fastq_samples.py:121: SyntaxWarning: 'list' object is not callable; perhaps you missed a comma?
+  extras = [st]()
+Traceback (most recent call last):
+  File "/scratch/prj/rosetree/Valentina/scripts/grouping_fastq_samples.py", line 16, in <module>
+    import pandas as pd
+ModuleNotFoundError: No module named 'pandas'
