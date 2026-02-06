@@ -88,3 +88,7 @@ Masking low-complexity regions of new file... done.
 Added "/scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/VP_10.fa" to library (/scratch/prj/rosetree/Valentina/databases/VMGC_DB/kraken2_vmgc_custom)
 Taxonomy parsed and converted.
 CHT created with 6 bits reserved for taxid.
+Completed processing of 70440 sequences, 1612003102 bp
+Writing data to disk...  complete.
+Database disk usage: 3.1G
+After cleaning, database uses 619M

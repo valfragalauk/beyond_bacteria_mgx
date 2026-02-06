@@ -6,3 +6,13 @@ Estimating required capacity (step 2)...
 Estimated hash table requirement: 646224456 bytes
 Capacity estimation complete. [33.517s]
 Building database files (step 3)...
+Database files completed. [3m42.650s]
+Database construction complete. [Total: 4m17.342s]
+Cleaning...
+DONE.
+total 619M
+-rw-rw----+ 1 k23141892 er_prj_rosetree 408K Feb  6 17:07 accmap_file.tmp
+-rw-rw----+ 1 k23141892 er_prj_rosetree 617M Feb  6 17:39 hash.k2d
+-rw-rw----+ 1 k23141892 er_prj_rosetree   64 Feb  6 17:39 opts.k2d
+-rw-rw----+ 1 k23141892 er_prj_rosetree 2.0M Feb  6 17:07 seqid2taxid.map.tmp
+-rw-rw----+ 1 k23141892 er_prj_rosetree 3.2K Feb  6 17:36 taxo.k2d
