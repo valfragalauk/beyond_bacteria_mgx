@@ -1,0 +1,31 @@
+# -----------------------------
+# Sequencing data 
+# -----------------------------
+*.fastq
+*.fastq.gz
+*.fq
+*.fq.gz
+
+# -----------------------------
+# files
+# -----------------------------
+data/
+results/
+sample_data/
+sample_results/
+databases/
+logs/
+
+# -----------------------------
+# Conda / Python junk
+# -----------------------------
+__pycache__/
+.env/
+.venv/
+*.pyc
+
+# -----------------------------
+# OS / editor files
+# -----------------------------
+.DS_Store
+*.swp
