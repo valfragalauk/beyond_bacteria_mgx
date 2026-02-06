@@ -1,0 +1,54 @@
+FASTA directory:   /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas
+Taxonomy directory:/scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_custom_taxonomy
+Kraken DB output:  /scratch/prj/rosetree/Valentina/databases/VMGC_DB/kraken2_vmgc_custom
+STEP 1: Create a minimal local taxonomy (NO NCBI download).
+STEP 2: Add VMGC FASTAs (with taxids in headers) to Kraken library.
+Number of FASTA files to add: 44
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/ERR10898147.mbin.11.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/GCA_002259805.1.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/GCA_002259835.1.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/GCA_002259865.1.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/GCA_002259875.1.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/GCA_002259885.1.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/GCA_014217725.1.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/GCA_018873225.1.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/GCA_019359905.1.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/GCA_019393625.1.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/GCA_020450195.1.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/GCA_020450215.1.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/GCA_020450235.1.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/GCA_020450265.1.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/GCA_025434895.1.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/GCA_025727145.1.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/GCA_029702875.1.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/GCA_029703225.1.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/MG1330.mbin.8.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/MG1331.mbin.16.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/MG1356.mbin.9.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/MG298.mbin.1.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/MG535.mbin.36.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/SRR12830910.mbin.13.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/SRR12830915.sbin.5.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/SRR12830916.mbin.10.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/SRR12830916.sbin.18.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/SRR12830917.mbin.3.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/SRR12830917.sbin.24.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/SRR12830920.mbin.7.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/SRR12830921.mbin.1.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/SRR12830928.mbin.5.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/SRR16916854.mbin.1.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/SRR19237612.sbin.2.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/VMGC_virus_all.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/VMGC_virus_vOTU.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/VP_02.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/VP_03.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/VP_04.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/VP_05.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/VP_06.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/VP_07.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/VP_08.fa
+Adding: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas/VP_10.fa
+STEP 3: Build the Kraken2 database (creates hash.k2d etc.).
+Creating sequence ID to taxonomy ID map (step 1)...
+Accession to taxid map files are required to build this DB.
+Run 'kraken2-build --db /scratch/prj/rosetree/Valentina/databases/VMGC_DB/kraken2_vmgc_custom --download-taxonomy' again?

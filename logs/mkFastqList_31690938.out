@@ -1,0 +1,12 @@
+Using ID list: /scratch/prj/rosetree/Valentina/data/wanted_ids_87.txt
+Sequences dir: /scratch/prj/rosetree/recovered/kneaddata_M2020/Sequences
+Non-empty IDs in list: 87
+FASTQs written to OUT: 87
+Missing/ambiguous IDs: 0
+SUCCESS ✅
+First 5 FASTQs:
+/scratch/prj/rosetree/recovered/kneaddata_M2020/Sequences/V300043643_L1_DKWGS200331001-510_1_kneaddata.fastq
+/scratch/prj/rosetree/recovered/kneaddata_M2020/Sequences/V300043643_L1_DKWGS200331002-511_1_kneaddata.fastq
+/scratch/prj/rosetree/recovered/kneaddata_M2020/Sequences/V300043643_L1_DKWGS200331003-512_1_kneaddata.fastq
+/scratch/prj/rosetree/recovered/kneaddata_M2020/Sequences/V300043643_L1_DKWGS200331004-513_1_kneaddata.fastq
+/scratch/prj/rosetree/recovered/kneaddata_M2020/Sequences/V300043643_L1_DKWGS200331005-514_1_kneaddata.fastq

@@ -1,0 +1,2 @@
+Downloading nucleotide gb accession to taxon map...@ERROR: Unknown module 'pub'
+rsync error: error starting client-server protocol (code 5) at main.c(1850) [Receiver=3.4.1]

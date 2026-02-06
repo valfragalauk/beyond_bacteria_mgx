@@ -1,0 +1,18 @@
+Input VMGC FASTA dir: /scratch/prj/rosetree/Valentina/databases/VMGC_DB
+Output FASTA dir:     /scratch/prj/rosetree/Valentina/databases/VMGC_DB_taxid_fastas
+Custom taxonomy dir:  /scratch/prj/rosetree/Valentina/databases/VMGC_custom_taxonomy
+Done.
+FASTAs processed: 44
+Example mapping:
+ERR10898147.mbin.11	900000001
+GCA_002259805.1	900000002
+GCA_002259835.1	900000003
+GCA_002259865.1	900000004
+GCA_002259875.1	900000005
+GCA_002259885.1	900000006
+GCA_014217725.1	900000007
+GCA_018873225.1	900000008
+GCA_019359905.1	900000009
+GCA_019393625.1	900000010
+Example rewritten header:
+>ERR10898147.mbin.11|k121_2180|kraken:taxid|900000001

@@ -1,0 +1,182 @@
+Searching for FASTA files...
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/VP_06.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/SRR12830915.sbin.5.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/SRR12830928.mbin.5.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_002259875.1.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/VP_07.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_020450215.1.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/SRR12830917.mbin.3.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_020450235.1.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_virus_all.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/SRR12830920.mbin.7.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_029703225.1.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/SRR12830921.mbin.1.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_002259805.1.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_020450265.1.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_019393625.1.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/MG535.mbin.36.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/VP_05.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/MG298.mbin.1.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/VP_04.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_002259835.1.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/SRR19237612.sbin.2.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_014217725.1.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/SRR12830916.sbin.18.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_002259885.1.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_019359905.1.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/VP_08.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/SRR12830916.mbin.10.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_virus_vOTU.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_025727145.1.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_018873225.1.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/MG1331.mbin.16.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/SRR12830917.sbin.24.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/VP_10.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/MG1356.mbin.9.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/VP_03.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_020450195.1.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/ERR10898147.mbin.11.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_025434895.1.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_002259865.1.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/MG1330.mbin.8.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/SRR12830910.mbin.13.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_029702875.1.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/VP_02.fa
+/scratch/prj/rosetree/Valentina/databases/VMGC_DB/SRR16916854.mbin.1.fa
+
+Checking FASTA headers for taxids...
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VP_06.fa ----
+>VP_06|ctg_1
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/SRR12830915.sbin.5.fa ----
+>SRR12830915.sbin.5|k121_13192
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/SRR12830928.mbin.5.fa ----
+>SRR12830928.mbin.5|k121_6738
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_002259875.1.fa ----
+>GCA_002259875.1|NETN01000001.1
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VP_07.fa ----
+>VP_07|ctg_1
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_020450215.1.fa ----
+>GCA_020450215.1|CP053512.1
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/SRR12830917.mbin.3.fa ----
+>SRR12830917.mbin.3|k121_40217
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_020450235.1.fa ----
+>GCA_020450235.1|CP053525.1
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_virus_all.fa ----
+>ERR2244423.k121_3969 flag=1 multi=7.7501 len=19389
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/SRR12830920.mbin.7.fa ----
+>SRR12830920.mbin.7|k121_9800
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_029703225.1.fa ----
+>GCA_029703225.1|JAKLXO010000001.1
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/SRR12830921.mbin.1.fa ----
+>SRR12830921.mbin.1|k121_7659
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_002259805.1.fa ----
+>GCA_002259805.1|NETM01000001.1
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_020450265.1.fa ----
+>GCA_020450265.1|CP060143.1
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_019393625.1.fa ----
+>GCA_019393625.1|PCDT01000001.1
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/MG535.mbin.36.fa ----
+>MG535.mbin.36|k121_15850
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VP_05.fa ----
+>VP_05|ctg_1
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/MG298.mbin.1.fa ----
+>MG298.mbin.1|k121_1160
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VP_04.fa ----
+>VP_04|ctg_1
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_002259835.1.fa ----
+>GCA_002259835.1|NETP01000001.1
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/SRR19237612.sbin.2.fa ----
+>SRR19237612.sbin.2|k121_2866
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_014217725.1.fa ----
+>GCA_014217725.1|CP048230.1
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/SRR12830916.sbin.18.fa ----
+>SRR12830916.sbin.18|k121_14216
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_002259885.1.fa ----
+>GCA_002259885.1|NETO01000001.1
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_019359905.1.fa ----
+>GCA_019359905.1|JAENJO010000001.1
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VP_08.fa ----
+>VP_08|ctg_1
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/SRR12830916.mbin.10.fa ----
+>SRR12830916.mbin.10|k121_7559
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_virus_vOTU.fa ----
+>v0001
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_025727145.1.fa ----
+>GCA_025727145.1|CP093669.1
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_018873225.1.fa ----
+>GCA_018873225.1|JAEILZ010000001.1
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/MG1331.mbin.16.fa ----
+>MG1331.mbin.16|k121_32033
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/SRR12830917.sbin.24.fa ----
+>SRR12830917.sbin.24|k121_30757
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VP_10.fa ----
+>VP_10|ctg_1
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/MG1356.mbin.9.fa ----
+>MG1356.mbin.9|k121_55380
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VP_03.fa ----
+>VP_03|ctg_1
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_020450195.1.fa ----
+>GCA_020450195.1|CP053486.1
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/ERR10898147.mbin.11.fa ----
+>ERR10898147.mbin.11|k121_2180
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_025434895.1.fa ----
+>GCA_025434895.1|CP093584.1
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_002259865.1.fa ----
+>GCA_002259865.1|NETQ01000001.1
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/MG1330.mbin.8.fa ----
+>MG1330.mbin.8|k121_20123
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/SRR12830910.mbin.13.fa ----
+>SRR12830910.mbin.13|k121_2654
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/GCA_029702875.1.fa ----
+>GCA_029702875.1|JAKLXH010000001.1
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VP_02.fa ----
+>VP_02|ctg_1
+No taxid pattern detected
+---- /scratch/prj/rosetree/Valentina/databases/VMGC_DB/SRR16916854.mbin.1.fa ----
+>SRR16916854.mbin.1|k121_4576
+No taxid pattern detected
+
+ERROR: No taxids detected in VMGC FASTA headers.
+Kraken2 CANNOT classify without taxids.
