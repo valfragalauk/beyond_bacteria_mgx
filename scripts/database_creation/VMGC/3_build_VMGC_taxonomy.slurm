@@ -45,8 +45,8 @@ PROJECT = "/scratch/prj/rosetree/Valentina"
 IN_DIR = Path(PROJECT) / "databases/VMGC_DB"
 FUNG_INFO = IN_DIR / "VMGC_eukaryocyte.info"
 VIR_INFO  = IN_DIR / "VMGC_virus.info"
-OUT_FASTA_DIR = Path(PROJECT) / "databases/VMGC_DB_taxid_fastas_v2"
-TAX_DIR = Path(PROJECT) / "databases/VMGC_custom_taxonomy_v2"
+OUT_FASTA_DIR = Path(PROJECT) / "databases/VMGC_DB/VMGC_DB_taxid_fastas"
+TAX_DIR = Path(PROJECT) / "databases/VMGC_DB/VMGC_custom_taxonomy"
 
 OUT_FASTA_DIR.mkdir(parents=True, exist_ok=True)
 TAX_DIR.mkdir(parents=True, exist_ok=True)
