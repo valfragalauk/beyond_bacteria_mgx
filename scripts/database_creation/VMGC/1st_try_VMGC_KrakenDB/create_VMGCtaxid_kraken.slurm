@@ -48,14 +48,24 @@ fi
 
 taxid=${START_TAXID}
 
-# We label each VMGC unit as a “species” only so Bracken can count it. It is NOT a real species.
-
+# For each viral genome file:Extract the filename and remove the .fa extension to get just the name
 for f in "${FASTAS[@]}"; do
   base=$(basename "${f}")
   name="${base%.*}"  # remove .fa
-
+# This script assigns each viral genome a fake ID (900000001, 
+# 900000002, etc.) and rewrites the FASTA headers to include these IDs.
+# It also creates taxonomy files (nodes.dmp, names.dmp) that tell Kraken2 
+# what these IDs mean.
+ 
+  # Record this virus name and its assigned taxid in mapping file
   echo -e "${name}\t${taxid}" >> "${MAP}"
+  
+  # Add entry to nodes.dmp (Kraken's taxonomy tree format)
+  # Format: taxid | parent_id | rank | other_fields
+  # We set parent to 1 (root) and rank to species
   echo -e "${taxid}\t|\t1\t|\tspecies\t|\t-\t|\t-\t|\t0\t|\t0\t|\t0\t|\t0\t|\t0\t|\t0\t|\t0\t|\t" >> "${NODES}"
+  
+  # Add entry to names.dmp (maps taxid to readable name)
   echo -e "${taxid}\t|\t${name}\t|\t\t|\tscientific name\t|" >> "${NAMES}"
 
   # Rewrite FASTA headers: append |kraken:taxid|TAXID to every header
@@ -74,6 +84,8 @@ for f in "${FASTAS[@]}"; do
 
   taxid=$((taxid + 1))
 done
+
+#Print summary
 
 echo "Done."
 echo "FASTAs processed: ${#FASTAS[@]}"

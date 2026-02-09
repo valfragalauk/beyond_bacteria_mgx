@@ -9,6 +9,8 @@ import random
 import sys
 from pathlib import Path
 
+# Reads FASTA file and extracts genome sequences
+
 def read_fasta(path: Path):
     """Yield (header, sequence) from a FASTA file."""
     header = None
@@ -28,9 +30,11 @@ def read_fasta(path: Path):
         if header is not None:
             yield header, "".join(seq_chunks).upper()
 
+# Check command-line arguments and extract parameters for generating synthetic reads.
+    # When running the job script, output file path, read length, number of reads per genome, a random seed and one or more genome files must be provided
+    # If anything is missing, print usage instructions and exit. 
+    # Otherwise, extract each argument, convert text to numbers, and set the random seed.
 def main():
-    # Usage:
-    #   fasta_to_reads_fastq.py out.fastq read_len reads_per_ref seed ref1.fa ref2.fa ...
     if len(sys.argv) < 7:
         print("Usage: fasta_to_reads_fastq.py out.fastq read_len reads_per_ref seed ref1.fa ref2.fa [...]", file=sys.stderr)
         sys.exit(1)

@@ -1,0 +1,13 @@
+[INFO] Input FASTA dir: /scratch/prj/rosetree/Valentina/databases/VMGC_DB
+[INFO] Fungal info:     /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_eukaryocyte.info
+[INFO] Viral info:      /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_virus.info
+[INFO] Output FASTAs:   /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas
+[INFO] Taxonomy dir:    /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_custom_taxonomy
+[INFO] Done building taxonomy + rewriting FASTAs
+[INFO] nodes.dmp: /scratch/prj/rosetree/Valentina/databases/VMGC_custom_taxonomy_v2/nodes.dmp
+[INFO] names.dmp: /scratch/prj/rosetree/Valentina/databases/VMGC_custom_taxonomy_v2/names.dmp
+[INFO] leaf map:  /scratch/prj/rosetree/Valentina/databases/VMGC_custom_taxonomy_v2/vmgc_leafname_to_taxid.tsv
+[INFO] output FASTAs in: /scratch/prj/rosetree/Valentina/databases/VMGC_DB_taxid_fastas_v2
+[INFO] Finished taxonomy build job.
+[INFO] Quick check:
+ - taxonomy files:
