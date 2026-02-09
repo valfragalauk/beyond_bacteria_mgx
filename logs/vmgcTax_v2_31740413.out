@@ -1,0 +1,17 @@
+[INFO] Input FASTA dir: /scratch/prj/rosetree/Valentina/databases/VMGC_DB
+[INFO] Fungal info:     /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_eukaryocyte.info
+[INFO] Viral info:      /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_virus.info
+[INFO] Output FASTAs:   /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas
+[INFO] Taxonomy dir:    /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_custom_taxonomy
+[INFO] Done building taxonomy + rewriting FASTAs
+[INFO] nodes.dmp: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_custom_taxonomy/nodes.dmp
+[INFO] names.dmp: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_custom_taxonomy/names.dmp
+[INFO] leaf map:  /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_custom_taxonomy/vmgc_leafname_to_taxid.tsv
+[INFO] output FASTAs in: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_DB_taxid_fastas
+[INFO] Finished taxonomy build job.
+[INFO] Quick check:
+ - taxonomy files:
+-rw-rw----+ 1 k23141892 er_prj_rosetree 1.1M Feb  9 13:43 /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_custom_taxonomy/names.dmp
+-rw-rw----+ 1 k23141892 er_prj_rosetree 1.6M Feb  9 13:43 /scratch/prj/rosetree/Valentina/databases/VMGC_DB/VMGC_custom_taxonomy/nodes.dmp
+ - rewritten FASTA count:
+44
