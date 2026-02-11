@@ -1,0 +1,13 @@
+[INFO] Copy custom taxonomy into DB
+[INFO] Add FASTAs to library
+[INFO] Build database
+Creating sequence ID to taxonomy ID map (step 1)...
+Sequence ID to taxonomy ID map complete. [5m24.440s]
+Estimating required capacity (step 2)...
+Estimated hash table requirement: 645842648 bytes
+Capacity estimation complete. [37.863s]
+Building database files (step 3)...
+Database files completed. [4m33.716s]
+Database construction complete. [Total: 10m38.173s]
+[INFO] Clean intermediate files (optional but recommended)
+[INFO] Done. DB at: /scratch/prj/rosetree/Valentina/databases/VMGC_DB/KrakenDB_VMGC_v2

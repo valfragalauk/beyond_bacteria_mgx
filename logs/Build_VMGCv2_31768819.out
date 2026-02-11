@@ -1,0 +1,6 @@
+[INFO] Copy custom taxonomy into DB
+[INFO] Add FASTAs to library
+[INFO] Build database
+Creating sequence ID to taxonomy ID map (step 1)...
+Accession to taxid map files are required to build this DB.
+Run 'kraken2-build --db /scratch/prj/rosetree/Valentina/databases/VMGC_DB/KrakenDB_VMGC_v2 --download-taxonomy' again?
