@@ -1,0 +1,40 @@
+#!/bin/bash -l
+#SBATCH --job-name=Build_VMGCv2
+#SBATCH --output=/scratch/prj/rosetree/Valentina/logs/%x_%j.out
+#SBATCH --error=/scratch/prj/rosetree/Valentina/logs/%x_%j.err
+#SBATCH --time=06:00:00
+#SBATCH --mem=32G
+#SBATCH --cpus-per-task=8
+
+set -euo pipefail
+
+#Location
+
+PROJECT="/scratch/prj/rosetree/Valentina"
+TAX_DIR="${PROJECT}/databases/VMGC_DB/VMGC_custom_taxonomy"
+IN_FASTA_DIR="${PROJECT}/databases/VMGC_DB/VMGC_DB_taxid_fastas"
+DB_DIR="${PROJECT}/databases/VMGC_DB/KrakenDB_VMGC_v2"
+
+#Conda enviroment
+source /software/spackages_v0_21_prod/apps/linux-ubuntu22.04-zen2/gcc-13.2.0/anaconda3-2022.10-5wy43yh5crcsmws4afls5thwoskzarhe/etc/profile.d/conda.sh
+conda activate kraken_env
+
+mkdir -p "${DB_DIR}"
+mkdir -p "${DB_DIR}/taxonomy"
+
+echo "[INFO] Copy custom taxonomy into DB"
+cp "${TAX_DIR}/nodes.dmp" "${DB_DIR}/taxonomy/nodes.dmp"
+cp "${TAX_DIR}/names.dmp" "${DB_DIR}/taxonomy/names.dmp"
+
+echo "[INFO] Add FASTAs to library"
+# Using all rewritten fastas.
+find "${IN_FASTA_DIR}" -maxdepth 1 -type f -name "*.fa" -print0 \
+  | xargs -0 -I{} -n1 kraken2-build --add-to-library {} --db "${DB_DIR}"
+
+echo "[INFO] Build database"
+kraken2-build --build --db /scratch/prj/rosetree/Valentina/databases/VMGC_DB/KrakenDB_VMGC_v2 --threads 8
+
+echo "[INFO] Clean intermediate files (optional but recommended)"
+kraken2-build --clean --db "${DB_DIR}"
+
+echo "[INFO] Done. DB at: ${DB_DIR}"
