@@ -1,6 +1,8 @@
 Flavia's quick notes 
 
-when you build Kraken there are some known issues. I have linked some on the CREATE forum https://forum.er.kcl.ac.uk/t/kraken2-metagenomics/232
+Build using the Kraken_build.sh (edit as needed) 
+
+When you build Kraken there are some known issues. I have linked some on the CREATE forum https://forum.er.kcl.ac.uk/t/kraken2-metagenomics/232
 
 
 Make sure that you don't run the clean up step before you are done building Braken
