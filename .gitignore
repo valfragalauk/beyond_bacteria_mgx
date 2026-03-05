@@ -15,6 +15,7 @@ sample_data/
 sample_results/
 databases/
 metadata/
+logs/
 
 # -----------------------------
 # Conda / Python junk
