@@ -1,0 +1,78 @@
+---
+title: "Plotting prevalence and thresholds"
+format: html
+editor: visual
+---
+
+```{r , fig.width=5, fig.height=4.5}
+
+install.packages("ggplot2")
+install.packages("readr")
+install.packages("dplyr")
+library(dplyr)
+library(ggplot2)
+library(readr)
+
+# Input file
+input_file <- "/scratch/prj/rosetree/Valentina/results/downstream/genbank/filtered/genbank_fungal_genus.taxon_summary_after_total_filter.tsv"
+
+# Output plot
+output_file <- "/scratch/prj/rosetree/Valentina/results/downstream/genbank/summary/genbank_fungal_prevalence.png"
+
+# Load data
+df <- read_tsv("/scratch/prj/rosetree/Valentina/results/downstream/genbank/filtered/genbank_fungal_genus.taxon_summary_after_total_filter.tsv") %>%
+  mutate(
+    threshold_group = ifelse(prevalence_fraction >= 0.02,
+                             "Kept (≥2%)",
+                             "Removed (<2%)")
+  )
+
+p <- ggplot(df, aes(x = total_count, y = prevalence_fraction, color = threshold_group)) +
+  geom_point(size = 1.5, alpha = 0.9) +
+  scale_x_log10() +
+  
+  geom_hline(
+    yintercept = 0.02,
+    linetype = "dashed",
+    linewidth = 0.9,
+    color = "#D55E00"
+  ) +
+  
+  scale_color_manual(values = c(
+    "Removed (<2%)" = "#999999",
+    "Kept (≥2%)" = "#56B4E9"
+  )) +
+  
+  labs(
+    title = "Genbank Fungal genera: prevalence vs abundance",
+    x = "Total abundance (log scale)",
+    y = "Prevalence (fraction of samples)",
+    color = NULL
+  ) +
+  
+  theme_classic(base_size = 14, base_family = "Nimbus Sans") +
+  theme(
+    plot.title = element_text(size = 14),
+    plot.subtitle = element_text(size = 9, color = "#4D4D4D"),
+    axis.title = element_text(size = 9),
+    axis.text = element_text(size = 9, color = "#333333"),
+    axis.line = element_line(linewidth = 0.4),
+    legend.position = "top",
+    legend.text = element_text(size = 9)
+  )
+
+p
+
+ggsave(
+  "/scratch/prj/rosetree/Valentina/results/downstream/genbank/summary/genbank_fungal_prevalence.png",
+  p,
+  width = 6.5,
+  height = 7.5,
+  dpi = 300
+)
+
+# Save plot
+ggsave(output_file, p, width = 4.5, height = 4.5)
+
+cat("Plot saved to:", output_file, "\n")
+```
