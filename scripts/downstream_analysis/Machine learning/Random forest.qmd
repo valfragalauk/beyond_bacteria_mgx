@@ -1,0 +1,880 @@
+---
+title: "RF model"
+format: html
+---
+```{r}
+install.packages("caret")
+install.packages("randomForest")
+install.packages("pROC")
+```
+
+
+```{r}
+# ============================================================
+# Random Forest prediction analysis
+# TERM vs sPTB
+# Candidate fungi, viruses, BMI, cytokines and metabolites
+# ============================================================
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(caret)
+  library(randomForest)
+  library(pROC)
+  library(ggplot2)
+  library(tibble)
+})
+
+set.seed(123)
+
+# ============================================================
+# Paths
+# ============================================================
+
+project_root <- "C:/Users/valfr/OneDrive/Documents/Masters/Research Project"
+data_dir     <- file.path(project_root, "Data")
+results_dir  <- file.path(project_root, "Results")
+figures_dir  <- file.path(project_root, "Figures")
+
+rf_results_dir <- file.path(results_dir, "Random_forest")
+rf_figures_dir <- file.path(figures_dir, "Random_forest")
+
+dir.create(rf_results_dir, showWarnings = FALSE, recursive = TRUE)
+dir.create(rf_figures_dir, showWarnings = FALSE, recursive = TRUE)
+
+metadata_file_tsv <- file.path(data_dir, "metadata_clean.tsv")
+
+fungal_file <- file.path(
+  data_dir,
+  "refseq_fungal_genus_2pct.totalcount_gt_1.prevalence_0p02.tsv"
+)
+
+viral_file <- file.path(
+  data_dir,
+  "refseq_viral_genus_2pct.totalcount_gt_1.prevalence_0p02.tsv"
+)
+
+# ============================================================
+# Read metadata
+# ============================================================
+
+meta <- read.delim(
+  metadata_file_tsv,
+  sep = "\t",
+  check.names = FALSE
+)
+
+colnames(meta)[1] <- "sample_label"
+
+meta$bmi <- as.numeric(meta$bmi)
+
+# ============================================================
+# Colour maps
+# ============================================================
+
+get_fungal_color_map <- function() {
+  c(
+    "Epichloe"            = "#0072B2",
+    "Aspergillus"         = "#E69F00",
+    "Saccharomyces"       = "#56B4E9",
+    "Candida"             = "#009E73",
+    "Venturia"            = "#CC79A7",
+    "Lodderomyces"        = "#F0E442",
+    "Coccidioides"        = "#D55E00",
+    "Lachancea"           = "#332288",
+    "Botrytis"            = "#88CCEE",
+    "Sphaerulina"         = "#117733",
+    "Schizosaccharomyces" = "#AA4499",
+    "Kwoniella"           = "#DDCC77",
+    "Fusarium"            = "#44AA99",
+    "Trichoderma"         = "#CC6677",
+    "Nakaseomyces"        = "#882255",
+    "Cryptococcus"        = "#117733",
+    "Puccinia"            = "#AA4499"
+  )
+}
+
+get_viral_color_map <- function() {
+  c(
+    "Oryzopoxvirus"        = "#0072B2",
+    "Alphapapillomavirus" = "#E69F00",
+    "Cukevirus"           = "#56B4E9",
+    "Epseptimavirus"      = "#009E73",
+    "Shenzhenivirus"      = "#CC79A7",
+    "Cytomegalovirus"     = "#F0E442",
+    "Aurunvirus"          = "#D55E00",
+    "Moonvirus"           = "#332288",
+    "Gelderlandvirus"     = "#88CCEE",
+    "Rockvillevirus"      = "#117733",
+    "Spinunavirus"        = "#AA4499",
+    "Orthoflavivirus"     = "#DDCC77",
+    "Gettysburgvirus"     = "#44AA99",
+    "Schiekvirus"         = "#CC6677",
+    "Fohxhuevirus"        = "#882255"
+  )
+}
+
+model_cols <- c(
+  "BMI only" = "#999999",
+  "Fungi + viruses" = "#0072B2",
+  "Fungi + viruses + BMI" = "#E69F00",
+  "Fungi + viruses + BMI + host metabolites" = "#009E73"
+)
+
+# ============================================================
+# Helper functions
+# ============================================================
+
+read_matrix <- function(file_path) {
+  mat <- read.delim(
+    file_path,
+    row.names = 1,
+    check.names = FALSE
+  )
+
+  mat <- as.data.frame(mat)
+  mat[] <- lapply(mat, function(x) as.numeric(as.character(x)))
+
+  return(mat)
+}
+
+align_to_metadata <- function(mat, meta) {
+  matrix_ids_clean <- sub("_1$", "", rownames(mat))
+
+  unmatched <- setdiff(matrix_ids_clean, meta$reads_ID)
+
+  if (length(unmatched) > 0) {
+    stop("Unmatched samples found: ", paste(unmatched, collapse = ", "))
+  }
+
+  meta_matched <- meta[
+    match(matrix_ids_clean, meta$reads_ID),
+  ]
+
+  if (!all(meta_matched$reads_ID == matrix_ids_clean)) {
+    stop("Metadata order mismatch")
+  }
+
+  rownames(mat) <- matrix_ids_clean
+  rownames(meta_matched) <- meta_matched$reads_ID
+
+  return(list(mat = mat, meta = meta_matched))
+}
+
+select_existing_features <- function(mat, features, layer_name) {
+  present <- intersect(features, colnames(mat))
+  missing <- setdiff(features, colnames(mat))
+
+  if (length(missing) > 0) {
+    message("Missing in ", layer_name, ": ", paste(missing, collapse = ", "))
+  }
+
+  if (length(present) == 0) {
+    stop("No requested features found in ", layer_name)
+  }
+
+  mat[, present, drop = FALSE]
+}
+
+clr_transform <- function(mat) {
+  mat <- as.matrix(mat)
+
+  min_positive <- min(mat[mat > 0], na.rm = TRUE)
+
+  if (!is.finite(min_positive)) {
+    stop("No positive values available for CLR transformation.")
+  }
+
+  pseudocount <- min_positive / 2
+  mat_pc <- mat + pseudocount
+
+  clr <- t(apply(mat_pc, 1, function(x) {
+    log(x) - mean(log(x))
+  }))
+
+  clr <- as.data.frame(clr)
+  rownames(clr) <- rownames(mat)
+
+  return(clr)
+}
+
+zscore_matrix <- function(mat) {
+  mat <- as.data.frame(mat)
+
+  mat <- mat[, apply(mat, 2, function(x) {
+    sd(x, na.rm = TRUE) > 0
+  }), drop = FALSE]
+
+  scaled <- scale(mat)
+  scaled[is.na(scaled)] <- 0
+
+  scaled <- as.data.frame(scaled)
+  rownames(scaled) <- rownames(mat)
+
+  return(scaled)
+}
+
+format_feature_names <- function(x) {
+  recode(
+    x,
+    "bmi" = "BMI",
+    "IL6" = "IL-6",
+    "IL37_pg_mL" = "IL-37",
+    "Lactate" = "Lactate",
+    "Succinate" = "Succinate",
+    "Putrescine" = "Putrescine"
+  )
+}
+
+get_feature_group <- function(feature) {
+  case_when(
+    feature %in% c(
+      "Aspergillus", "Fusarium", "Cryptococcus",
+      "Puccinia", "Saccharomyces", "Trichoderma"
+    ) ~ "Fungal",
+    feature %in% c("Shenzhenivirus", "Fohxhuevirus") ~ "Viral",
+    feature %in% c("IL6", "IL37_pg_mL") ~ "Cytokine",
+    feature %in% c("Lactate", "Succinate", "Putrescine") ~ "Metabolite",
+    feature == "bmi" ~ "Clinical",
+    TRUE ~ "Other"
+  )
+}
+
+run_rf_model <- function(model_df, outcome_col, model_name, model_label) {
+
+  model_df <- model_df %>%
+    filter(!is.na(.data[[outcome_col]]))
+
+  model_df[[outcome_col]] <- factor(
+    model_df[[outcome_col]],
+    levels = c("sPTB", "TERM")
+  )
+
+  predictors <- model_df %>%
+    select(-reads_ID, -sample_label, -all_of(outcome_col))
+
+  predictors <- predictors[, apply(predictors, 2, function(x) {
+    sd(x, na.rm = TRUE) > 0
+  }), drop = FALSE]
+
+  final_df <- bind_cols(
+    outcome = model_df[[outcome_col]],
+    predictors
+  )
+
+  colnames(final_df)[1] <- outcome_col
+
+  # Repeated cross-validation is used for performance estimation.
+  # This avoids an unstable single train/test split in a small cohort.
+  ctrl_repeated <- trainControl(
+    method = "repeatedcv",
+    number = 5,
+    repeats = 20,
+    classProbs = TRUE,
+    summaryFunction = twoClassSummary,
+    savePredictions = "final"
+  )
+
+  rf_fit <- train(
+    as.formula(paste(outcome_col, "~ .")),
+    data = final_df,
+    method = "rf",
+    metric = "ROC",
+    trControl = ctrl_repeated,
+    tuneLength = 5,
+    importance = TRUE
+  )
+
+  best_mtry <- rf_fit$bestTune$mtry
+
+  pred_best <- rf_fit$pred %>%
+    filter(mtry == best_mtry)
+
+  roc_obj <- roc(
+    response = pred_best$obs,
+    predictor = pred_best$sPTB,
+    levels = c("TERM", "sPTB"),
+    direction = "<"
+  )
+
+  confusion_repeated <- confusionMatrix(
+    data = pred_best$pred,
+    reference = pred_best$obs,
+    positive = "sPTB"
+  )
+
+  # A single 5-fold cross-validation pass is used to produce one
+  # out-of-fold prediction per sample for the confusion matrix.
+  ctrl_single <- trainControl(
+    method = "cv",
+    number = 5,
+    classProbs = TRUE,
+    summaryFunction = twoClassSummary,
+    savePredictions = "final"
+  )
+
+  rf_fit_single <- train(
+    as.formula(paste(outcome_col, "~ .")),
+    data = final_df,
+    method = "rf",
+    metric = "ROC",
+    trControl = ctrl_single,
+    tuneGrid = data.frame(mtry = best_mtry),
+    importance = TRUE
+  )
+
+  pred_single <- rf_fit_single$pred %>%
+    filter(mtry == best_mtry)
+
+  confusion_single <- confusionMatrix(
+    data = pred_single$pred,
+    reference = pred_single$obs,
+    positive = "sPTB"
+  )
+
+  performance <- data.frame(
+    model = model_name,
+    model_label = model_label,
+    AUC = as.numeric(auc(roc_obj)),
+    Accuracy = as.numeric(confusion_repeated$overall["Accuracy"]),
+    Sensitivity = as.numeric(confusion_repeated$byClass["Sensitivity"]),
+    Specificity = as.numeric(confusion_repeated$byClass["Specificity"]),
+    Balanced_Accuracy = as.numeric(confusion_repeated$byClass["Balanced Accuracy"]),
+    best_mtry = best_mtry,
+    n_samples = nrow(final_df),
+    n_predictors = ncol(predictors)
+  )
+
+  importance <- varImp(rf_fit)$importance %>%
+    as.data.frame() %>%
+    rownames_to_column("feature")
+
+  if (!"Overall" %in% colnames(importance)) {
+    importance_cols <- setdiff(colnames(importance), "feature")
+    importance$Overall <- importance[[importance_cols[1]]]
+  }
+
+  importance <- importance %>%
+    mutate(
+      feature_group = get_feature_group(feature),
+      feature_label = format_feature_names(feature)
+    ) %>%
+    arrange(desc(Overall))
+
+  write.csv(
+    performance,
+    file.path(rf_results_dir, paste0(model_name, "_performance.csv")),
+    row.names = FALSE
+  )
+
+  write.csv(
+    importance,
+    file.path(rf_results_dir, paste0(model_name, "_feature_importance.csv")),
+    row.names = FALSE
+  )
+
+  write.csv(
+    as.data.frame(confusion_single$table),
+    file.path(rf_results_dir, paste0(model_name, "_confusion_matrix_5fold.csv")),
+    row.names = FALSE
+  )
+
+  saveRDS(
+    rf_fit,
+    file.path(rf_results_dir, paste0(model_name, "_repeated_cv_model.rds"))
+  )
+
+  saveRDS(
+    rf_fit_single,
+    file.path(rf_results_dir, paste0(model_name, "_single_5fold_model.rds"))
+  )
+
+  return(list(
+    model = rf_fit,
+    model_single = rf_fit_single,
+    performance = performance,
+    importance = importance,
+    confusion_repeated = confusion_repeated,
+    confusion_single = confusion_single,
+    roc = roc_obj,
+    predictions_repeated = pred_best,
+    predictions_single = pred_single
+  ))
+}
+
+# ============================================================
+# Read and align fungal and viral data
+# ============================================================
+
+fungi <- read_matrix(fungal_file)
+fungi_aligned <- align_to_metadata(fungi, meta)
+
+fungi <- fungi_aligned$mat
+meta_aligned <- fungi_aligned$meta
+
+viruses <- read_matrix(viral_file)
+viruses_aligned <- align_to_metadata(viruses, meta)
+
+viruses <- viruses_aligned$mat
+
+# ============================================================
+# Define selected features
+# ============================================================
+
+fungal_candidates <- c(
+  "Aspergillus",
+  "Fusarium",
+  "Cryptococcus",
+  "Puccinia",
+  "Saccharomyces",
+  "Trichoderma"
+)
+
+viral_candidates <- c(
+  "Shenzhenivirus",
+  "Fohxhuevirus"
+)
+
+selected_host_features <- c(
+  "IL6",
+  "IL37_pg_mL",
+  "Lactate",
+  "Succinate",
+  "Putrescine"
+)
+
+# ============================================================
+# Check that metadata-derived predictors exist
+# ============================================================
+
+required_metadata_predictors <- c(
+  "bmi",
+  selected_host_features
+)
+
+missing_metadata_predictors <- setdiff(
+  required_metadata_predictors,
+  colnames(meta_aligned)
+)
+
+if (length(missing_metadata_predictors) > 0) {
+  stop(
+    "These required metadata predictors are missing from metadata_clean.tsv: ",
+    paste(missing_metadata_predictors, collapse = ", ")
+  )
+}
+
+# ============================================================
+# Prepare fungal and viral model layers
+# ============================================================
+
+fungal_layer <- fungi %>%
+  select_existing_features(fungal_candidates, "RefSeq fungi") %>%
+  clr_transform() %>%
+  zscore_matrix()
+
+viral_layer <- viruses %>%
+  select_existing_features(viral_candidates, "RefSeq viruses") %>%
+  clr_transform() %>%
+  zscore_matrix()
+
+# ============================================================
+# Prepare BMI and host feature layers from metadata
+# ============================================================
+
+bmi_layer <- meta_aligned[, "bmi", drop = FALSE]
+bmi_layer$bmi <- as.numeric(as.character(bmi_layer$bmi))
+rownames(bmi_layer) <- meta_aligned$reads_ID
+bmi_layer <- zscore_matrix(bmi_layer)
+
+host_layer <- meta_aligned[, selected_host_features, drop = FALSE]
+host_layer[] <- lapply(
+  host_layer,
+  function(x) as.numeric(as.character(x))
+)
+rownames(host_layer) <- meta_aligned$reads_ID
+host_layer <- zscore_matrix(host_layer)
+
+# ============================================================
+# Match samples across all layers
+# ============================================================
+
+common_samples <- Reduce(
+  intersect,
+  list(
+    rownames(fungal_layer),
+    rownames(viral_layer),
+    rownames(bmi_layer),
+    rownames(host_layer)
+  )
+)
+
+metadata_model <- meta_aligned[
+  common_samples,
+  c("reads_ID", "sample_label", "outcome"),
+  drop = FALSE
+]
+
+# ============================================================
+# Remove samples with missing outcome or model predictors
+# ============================================================
+
+complete_sample_check <- bind_cols(
+  metadata_model,
+  fungal_layer[common_samples, , drop = FALSE],
+  viral_layer[common_samples, , drop = FALSE],
+  bmi_layer[common_samples, , drop = FALSE],
+  host_layer[common_samples, , drop = FALSE]
+)
+
+complete_samples <- complete_sample_check$reads_ID[
+  complete.cases(complete_sample_check)
+]
+
+metadata_model <- metadata_model[complete_samples, , drop = FALSE]
+
+# ============================================================
+# Build four Random Forest input datasets
+# ============================================================
+
+rf_input_bmi <- bind_cols(
+  metadata_model,
+  bmi_layer[complete_samples, , drop = FALSE]
+)
+
+rf_input_microbiome <- bind_cols(
+  metadata_model,
+  fungal_layer[complete_samples, , drop = FALSE],
+  viral_layer[complete_samples, , drop = FALSE]
+)
+
+rf_input_microbiome_bmi <- bind_cols(
+  metadata_model,
+  fungal_layer[complete_samples, , drop = FALSE],
+  viral_layer[complete_samples, , drop = FALSE],
+  bmi_layer[complete_samples, , drop = FALSE]
+)
+
+rf_input_integrated <- bind_cols(
+  metadata_model,
+  fungal_layer[complete_samples, , drop = FALSE],
+  viral_layer[complete_samples, , drop = FALSE],
+  bmi_layer[complete_samples, , drop = FALSE],
+  host_layer[complete_samples, , drop = FALSE]
+)
+
+# ============================================================
+# Run Random Forest models
+# ============================================================
+
+rf_bmi <- run_rf_model(
+  model_df = rf_input_bmi,
+  outcome_col = "outcome",
+  model_name = "RF_A_BMI_only",
+  model_label = "BMI only"
+)
+
+rf_microbiome <- run_rf_model(
+  model_df = rf_input_microbiome,
+  outcome_col = "outcome",
+  model_name = "RF_B_fungi_viruses_only",
+  model_label = "Fungi + viruses"
+)
+
+rf_microbiome_bmi <- run_rf_model(
+  model_df = rf_input_microbiome_bmi,
+  outcome_col = "outcome",
+  model_name = "RF_C_fungi_viruses_BMI",
+  model_label = "Fungi + viruses + BMI"
+)
+
+rf_integrated <- run_rf_model(
+  model_df = rf_input_integrated,
+  outcome_col = "outcome",
+  model_name = "RF_D_fungi_viruses_BMI_host_metabolites",
+  model_label = "Fungi + viruses + BMI + host metabolites"
+)
+
+# ============================================================
+# Compare performance across models
+# ============================================================
+
+performance_all <- bind_rows(
+  rf_bmi$performance,
+  rf_microbiome$performance,
+  rf_microbiome_bmi$performance,
+  rf_integrated$performance
+)
+
+performance_all$model_label <- factor(
+  performance_all$model_label,
+  levels = c(
+    "BMI only",
+    "Fungi + viruses",
+    "Fungi + viruses + BMI",
+    "Fungi + viruses + BMI + host metabolites"
+  )
+)
+
+write.csv(
+  performance_all,
+  file.path(rf_results_dir, "RF_model_performance_summary.csv"),
+  row.names = FALSE
+)
+
+print(performance_all)
+
+# ============================================================
+# AUC comparison plot
+# ============================================================
+
+p_auc <- ggplot(performance_all, aes(x = model_label, y = AUC, fill = model_label)) +
+  geom_col(width = 0.7, colour = "black", linewidth = 0.2) +
+  geom_text(
+    aes(label = round(AUC, 3)),
+    hjust = -0.15,
+    size = 3.5
+  ) +
+  coord_flip() +
+  scale_fill_manual(values = model_cols) +
+  ylim(0, max(performance_all$AUC, na.rm = TRUE) + 0.12) +
+  theme_bw(base_size = 12) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold"),
+    axis.title.y = element_blank()
+  ) +
+  labs(
+    title = "Random Forest model performance",
+    y = "Repeated cross-validated AUC"
+  )
+
+ggsave(
+  file.path(rf_figures_dir, "RF_AUC_comparison.png"),
+  p_auc,
+  width = 8,
+  height = 5,
+  dpi = 300
+)
+
+print(p_auc)
+
+# ============================================================
+# ROC curves for all models
+# ============================================================
+
+roc_df <- bind_rows(
+  data.frame(
+    false_positive_rate = 1 - rf_bmi$roc$specificities,
+    sensitivity = rf_bmi$roc$sensitivities,
+    model_label = paste0("BMI only (AUC = ", round(rf_bmi$performance$AUC, 3), ")"),
+    model_colour = "BMI only"
+  ),
+  data.frame(
+    false_positive_rate = 1 - rf_microbiome$roc$specificities,
+    sensitivity = rf_microbiome$roc$sensitivities,
+    model_label = paste0("Fungi + viruses (AUC = ", round(rf_microbiome$performance$AUC, 3), ")"),
+    model_colour = "Fungi + viruses"
+  ),
+  data.frame(
+    false_positive_rate = 1 - rf_microbiome_bmi$roc$specificities,
+    sensitivity = rf_microbiome_bmi$roc$sensitivities,
+    model_label = paste0("Fungi + viruses + BMI (AUC = ", round(rf_microbiome_bmi$performance$AUC, 3), ")"),
+    model_colour = "Fungi + viruses + BMI"
+  ),
+  data.frame(
+    false_positive_rate = 1 - rf_integrated$roc$specificities,
+    sensitivity = rf_integrated$roc$sensitivities,
+    model_label = paste0("Fungi + viruses + BMI + host metabolites (AUC = ", round(rf_integrated$performance$AUC, 3), ")"),
+    model_colour = "Fungi + viruses + BMI + host metabolites"
+  )
+)
+
+roc_label_cols <- setNames(
+  model_cols[unique(roc_df$model_colour)],
+  unique(roc_df$model_label)
+)
+
+p_roc <- ggplot(roc_df, aes(x = false_positive_rate, y = sensitivity, colour = model_label)) +
+  geom_line(linewidth = 1.1) +
+  geom_abline(
+    intercept = 0,
+    slope = 1,
+    linetype = "dashed",
+    colour = "#999999"
+  ) +
+  scale_colour_manual(values = roc_label_cols) +
+  coord_equal() +
+  theme_bw(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    legend.title = element_blank(),
+    legend.position = "right"
+  ) +
+  labs(
+    title = "Random Forest ROC curves",
+    x = "False positive rate (1 - specificity)",
+    y = "Sensitivity"
+  )
+
+ggsave(
+  file.path(rf_figures_dir, "RF_ROC_curves_with_AUC.png"),
+  p_roc,
+  width = 8,
+  height = 5.5,
+  dpi = 300
+)
+
+print(p_roc)
+
+# ============================================================
+# Feature importance plot for integrated model
+# ============================================================
+
+feature_colour_map <- c(
+  get_fungal_color_map(),
+  get_viral_color_map(),
+  "BMI" = "#999999",
+  "IL-6" = "#009E73",
+  "IL-37" = "#CC79A7",
+  "Lactate" = "#56B4E9",
+  "Succinate" = "#E69F00",
+  "Putrescine" = "#D55E00"
+)
+
+importance_integrated <- rf_integrated$importance %>%
+  slice_head(n = 12) %>%
+  mutate(
+    feature_label = factor(
+      feature_label,
+      levels = rev(feature_label)
+    )
+  )
+
+feature_colour_map_integrated <- feature_colour_map[
+  levels(importance_integrated$feature_label)
+]
+
+p_imp_integrated <- ggplot(
+  importance_integrated,
+  aes(x = feature_label, y = Overall, fill = feature_label)
+) +
+  geom_col(colour = "black", linewidth = 0.2, width = 0.7) +
+  coord_flip() +
+  scale_fill_manual(values = feature_colour_map_integrated, drop = FALSE) +
+  theme_bw(base_size = 12) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold"),
+    axis.title.y = element_blank()
+  ) +
+  labs(
+    title = "Top predictors in integrated Random Forest model",
+    y = "Variable importance"
+  )
+
+ggsave(
+  file.path(rf_figures_dir, "RF_integrated_feature_importance.png"),
+  p_imp_integrated,
+  width = 7,
+  height = 5,
+  dpi = 300
+)
+
+print(p_imp_integrated)
+
+# ============================================================
+# Confusion matrix heatmaps
+# ============================================================
+
+plot_confusion_heatmap <- function(confusion_obj, model_label, file_label) {
+
+  cm <- as.data.frame(confusion_obj$table)
+  colnames(cm) <- c("Prediction", "Reference", "N")
+
+  cm$Prediction <- factor(cm$Prediction, levels = c("TERM", "sPTB"))
+  cm$Reference <- factor(cm$Reference, levels = c("TERM", "sPTB"))
+
+  p <- ggplot(cm, aes(x = Reference, y = Prediction, fill = N)) +
+    geom_tile(colour = "white", linewidth = 0.8) +
+    geom_text(aes(label = N), size = 5) +
+    scale_fill_gradient(low = "white", high = "#0072B2") +
+    theme_bw(base_size = 12) +
+    theme(
+      plot.title = element_text(face = "bold"),
+      legend.title = element_text(size = 10)
+    ) +
+    labs(
+      title = paste0("Confusion matrix: ", model_label),
+      x = "Observed outcome",
+      y = "Predicted outcome",
+      fill = "Samples"
+    )
+
+  ggsave(
+    file.path(rf_figures_dir, paste0(file_label, "_confusion_matrix_5fold.png")),
+    p,
+    width = 5,
+    height = 4,
+    dpi = 300
+  )
+
+  return(p)
+}
+
+p_cm_bmi <- plot_confusion_heatmap(
+  rf_bmi$confusion_single,
+  "BMI only",
+  "RF_A_BMI_only"
+)
+
+p_cm_microbiome <- plot_confusion_heatmap(
+  rf_microbiome$confusion_single,
+  "Fungi + viruses",
+  "RF_B_fungi_viruses_only"
+)
+
+p_cm_microbiome_bmi <- plot_confusion_heatmap(
+  rf_microbiome_bmi$confusion_single,
+  "Fungi + viruses + BMI",
+  "RF_C_fungi_viruses_BMI"
+)
+
+p_cm_integrated <- plot_confusion_heatmap(
+  rf_integrated$confusion_single,
+  "Fungi + viruses + BMI + host metabolites",
+  "RF_D_fungi_viruses_BMI_host_metabolites"
+)
+
+print(p_cm_integrated)
+
+# ============================================================
+# Combined feature importance table
+# ============================================================
+
+importance_summary <- bind_rows(
+  rf_microbiome$importance %>%
+    mutate(model = "RF_B_fungi_viruses_only"),
+
+  rf_microbiome_bmi$importance %>%
+    mutate(model = "RF_C_fungi_viruses_BMI"),
+
+  rf_integrated$importance %>%
+    mutate(model = "RF_D_fungi_viruses_BMI_host_metabolites")
+)
+
+write.csv(
+  importance_summary,
+  file.path(rf_results_dir, "RF_all_feature_importance_summary.csv"),
+  row.names = FALSE
+)
+
+# ============================================================
+# Save reproducibility information
+# ============================================================
+
+sink(file.path(rf_results_dir, "session_info.txt"))
+sessionInfo()
+sink()
+```
+

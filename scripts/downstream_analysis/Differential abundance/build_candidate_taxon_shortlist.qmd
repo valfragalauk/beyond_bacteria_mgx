@@ -1,0 +1,381 @@
+---
+title: "build_candidate_taxon_shortlist"
+format: html
+---
+
+
+```{r}
+# SELECTING PRIORITY TAXON:
+
+# Multiple taxon-level methods were applied, including abundance testing, prevalence testing and MaAsLin2. Because the study was exploratory and generated numerous nominal associations, a candidate taxon shortlisting step was performed. Taxa supported by multiple complementary methods were prioritised for downstream visualisation, regression modelling and integration analyses. This reduced the likelihood of overinterpreting isolated findings arising from sparse microbiome data.
+
+# The following results were used:
+#   1. Wilcoxon abundance testing
+#   2. Fisher prevalence testing
+#   3. BMI-adjusted MaAsLin2 models
+#
+#
+# LEfSe was not included in the evidence score because no significant
+# LEfSe results were generated.
+#
+# Output:
+# candidate_taxa_master_shortlist.csv
+#
+# ============================================================
+
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(readr)
+  library(stringr)
+  library(purrr)
+})
+
+
+# ============================================================
+# 1. Set directory
+# ============================================================
+
+shortlist_dir <- "C:/Users/valfr/OneDrive/Documents/Masters/Research Project/Shortlisting"
+
+out_file <- file.path(
+  shortlist_dir,
+  "candidate_taxa_master_shortlist.csv"
+)
+
+
+# ============================================================
+# 2. Read Wilcoxon abundance results
+# ============================================================
+
+wilcoxon_file <- file.path(
+  shortlist_dir,
+  "all_datasets_wilcoxon_full_results.tsv"
+)
+
+wilcoxon_df <- read_tsv(
+  wilcoxon_file,
+  show_col_types = FALSE
+) %>%
+  filter(str_detect(dataset, "refseq")) %>%
+  filter(p_value < 0.05) %>%
+  transmute(
+    taxon = taxon,
+    
+    domain = case_when(
+      str_detect(dataset, "fungal") ~ "Fungal",
+      str_detect(dataset, "viral") ~ "Viral",
+      TRUE ~ "Other"
+    ),
+    
+    comparison = comparison,
+    
+    wilcoxon_signal = TRUE,
+    wilcoxon_p = p_value,
+    wilcoxon_q = q_value_BH,
+    wilcoxon_enriched_group = enriched_group
+  )
+
+
+# ============================================================
+# 3. Read Fisher prevalence results
+# ============================================================
+
+fisher_file <- file.path(
+  shortlist_dir,
+  "fishers_all_results.csv"
+)
+
+fisher_df <- read_csv(
+  fisher_file,
+  show_col_types = FALSE
+) %>%
+  filter(p_value < 0.05) %>%
+  transmute(
+    taxon = taxon,
+    
+    domain = case_when(
+      str_detect(dataset, "fungi") ~ "Fungal",
+      str_detect(dataset, "viruses") ~ "Viral",
+      TRUE ~ "Other"
+    ),
+    
+    comparison = case_when(
+      outcome == "outcome" ~ "TERM_vs_sPTB",
+      outcome == "sPTB34" ~ "sPTB34_yes_vs_no",
+      TRUE ~ outcome
+    ),
+    
+    fisher_signal = TRUE,
+    fisher_p = p_value,
+    fisher_q = q_value,
+    fisher_enriched_group = enriched_group,
+    prevalence_group_1 = prevalence_group_1,
+    prevalence_group_2 = prevalence_group_2,
+    prevalence_difference = prevalence_difference_group2_minus_group1
+  )
+
+
+# ============================================================
+# 4. Read BMI-adjusted MaAsLin2 results
+# ============================================================
+
+maaslin_files <- list.files(
+  shortlist_dir,
+  pattern = "maaslin_.*BMI_adjusted.*\\.tsv$",
+  full.names = TRUE
+)
+
+maaslin_df <- map_dfr(maaslin_files, function(file) {
+  
+  model_name <- basename(file)
+  
+  read_tsv(
+    file,
+    show_col_types = FALSE
+  ) %>%
+    mutate(model = model_name)
+}) %>%
+  filter(metadata != "bmi") %>%
+  filter(pval < 0.05) %>%
+  transmute(
+    taxon = feature,
+    
+    domain = case_when(
+      str_detect(model, "fungal") ~ "Fungal",
+      str_detect(model, "viral") ~ "Viral",
+      TRUE ~ "Other"
+    ),
+    
+    comparison = case_when(
+      metadata == "outcome" ~ "TERM_vs_sPTB",
+      metadata == "sPTB34" ~ "sPTB34_yes_vs_no",
+      TRUE ~ metadata
+    ),
+    
+    maaslin_signal = TRUE,
+    maaslin_p = pval,
+    maaslin_q = qval,
+    maaslin_coef = coef,
+    maaslin_value = value
+  )
+
+
+# ============================================================
+# 5. Combine taxa identified by any method
+# ============================================================
+
+all_taxa <- bind_rows(
+  wilcoxon_df %>% select(taxon, domain, comparison),
+  fisher_df %>% select(taxon, domain, comparison),
+  maaslin_df %>% select(taxon, domain, comparison)
+) %>%
+  distinct()
+
+
+# ============================================================
+# 6. Join method-level evidence
+# ============================================================
+
+candidate_shortlist <- all_taxa %>%
+  left_join(
+    wilcoxon_df,
+    by = c("taxon", "domain", "comparison")
+  ) %>%
+  left_join(
+    fisher_df,
+    by = c("taxon", "domain", "comparison")
+  ) %>%
+  left_join(
+    maaslin_df,
+    by = c("taxon", "domain", "comparison")
+  ) %>%
+  mutate(
+    wilcoxon_signal = if_else(
+      is.na(wilcoxon_signal),
+      FALSE,
+      wilcoxon_signal
+    ),
+    
+    fisher_signal = if_else(
+      is.na(fisher_signal),
+      FALSE,
+      fisher_signal
+    ),
+    
+    maaslin_signal = if_else(
+      is.na(maaslin_signal),
+      FALSE,
+      maaslin_signal
+    ),
+    
+    evidence_score =
+      as.integer(wilcoxon_signal) +
+      as.integer(fisher_signal) +
+      as.integer(maaslin_signal),
+    
+    evidence_sources = pmap_chr(
+      list(
+        wilcoxon_signal,
+        fisher_signal,
+        maaslin_signal
+      ),
+      function(wilcoxon, fisher, maaslin) {
+        
+        sources <- c()
+        
+        if (wilcoxon) {
+          sources <- c(sources, "Wilcoxon abundance")
+        }
+        
+        if (fisher) {
+          sources <- c(sources, "Fisher prevalence")
+        }
+        
+        if (maaslin) {
+          sources <- c(sources, "MaAsLin2 BMI-adjusted")
+        }
+        
+        paste(sources, collapse = "; ")
+      }
+    ),
+    
+    priority = case_when(
+      evidence_score >= 3 ~ "High priority",
+      evidence_score == 2 ~ "Moderate priority",
+      evidence_score == 1 ~ "Exploratory single-method signal",
+      TRUE ~ "No evidence"
+    ),
+    
+    carry_forward = case_when(
+      evidence_score >= 2 ~ "Yes",
+      evidence_score == 1 ~ "Consider",
+      TRUE ~ "No"
+    )
+  ) %>%
+  arrange(
+    desc(evidence_score),
+    domain,
+    comparison,
+    taxon
+  )
+
+
+# ============================================================
+# 7. Save shortlist
+# ============================================================
+
+write_csv(
+  candidate_shortlist,
+  out_file
+)
+
+message("Candidate shortlist saved to:")
+message(out_file)
+
+
+# ============================================================
+# 8. Print summary tables
+# ============================================================
+
+summary_table <- candidate_shortlist %>%
+  count(
+    domain,
+    comparison,
+    priority,
+    carry_forward
+  )
+
+print(summary_table)
+
+candidate_shortlist %>%
+  select(
+    taxon,
+    domain,
+    comparison,
+    evidence_score,
+    evidence_sources,
+    priority,
+    carry_forward
+  ) %>%
+  print(n = Inf)
+```
+```{r}
+# ============================================================
+# Table Candidate taxa shortlist
+# ============================================================
+
+library(dplyr)
+library(readr)
+
+project_root <- "C:/Users/valfr/OneDrive/Documents/Masters/Research Project"
+
+shortlist_file <- file.path(
+  project_root,
+  "Shortlisting",
+  "candidate_taxa_master_shortlist.csv"
+)
+
+out_dir <- file.path(
+  project_root,
+  "Results",
+  "candidate_shortlist"
+)
+
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+shortlist <- read_csv(
+  shortlist_file,
+  show_col_types = FALSE
+)
+
+supp_table <- shortlist %>%
+  transmute(
+    Taxon = taxon,
+    
+    Domain = domain,
+    
+    Comparison = case_when(
+      comparison == "TERM_vs_sPTB" ~ "TERM vs sPTB",
+      comparison == "sPTB34_yes_vs_no" ~ "sPTB34 yes vs no",
+      TRUE ~ comparison
+    ),
+    
+    `Wilcoxon p-value` =
+      round(wilcoxon_p, 4),
+    
+    `Fisher prevalence p-value` =
+      round(fisher_p, 4),
+    
+    `MaAsLin2 p-value` =
+      round(maaslin_p, 4),
+    
+    `Evidence score` =
+      evidence_score,
+    
+    Priority =
+      priority,
+    
+    `Carried forward` =
+      carry_forward
+  ) %>%
+  arrange(
+    desc(`Evidence score`),
+    Domain,
+    Taxon
+  )
+
+write_csv(
+  supp_table,
+  file.path(
+    out_dir,
+    "Supplementary_Table_S1_candidate_taxa_shortlist.csv"
+  )
+)
+
+message(
+  "Supplementary table saved to: ",
+  out_dir
+)
+```
+

@@ -1,0 +1,534 @@
+---
+title: "Integration analysis"
+format: html
+---
+
+```{r}
+# ============================================================
+# Integrated fungal–viral–host profile analysis
+# Candidate microbial taxa vs host/clinical features
+# ============================================================
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tibble)
+  library(ggplot2)
+  library(pheatmap)
+})
+
+# ------------------------------------------------------------
+# File paths
+# ------------------------------------------------------------
+
+project_root <- "C:/Users/valfr/OneDrive/Documents/Masters/Research Project"
+
+data_dir <- file.path(project_root, "Data")
+results_dir <- file.path(project_root, "Results")
+figures_dir <- file.path(project_root, "Figures")
+
+metadata_file_tsv <- file.path(data_dir, "metadata_clean.tsv")
+
+fungal_file <- file.path(
+  data_dir,
+  "refseq_fungal_genus_2pct.totalcount_gt_1.prevalence_0p02.tsv"
+)
+
+viral_file <- file.path(
+  data_dir,
+  "refseq_viral_genus_2pct.totalcount_gt_1.prevalence_0p02.tsv"
+)
+
+out_dir <- file.path(results_dir, "integrated_profile_analysis")
+fig_out_dir <- file.path(figures_dir, "integrated_profile_analysis")
+
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(fig_out_dir, recursive = TRUE, showWarnings = FALSE)
+
+# ------------------------------------------------------------
+# Candidate microbial and host features
+# ------------------------------------------------------------
+
+fungal_candidates <- c(
+  "Aspergillus",
+  "Fusarium",
+  "Cryptococcus",
+  "Puccinia",
+  "Saccharomyces",
+  "Trichoderma"
+)
+
+viral_candidates <- c(
+  "Shenzhenivirus",
+  "Fohxhuevirus"
+)
+
+host_features <- c(
+  "IL37_pg_mL",
+  "IL6",
+  "Succinate",
+  "Lactate",
+  "Putrescine",
+  "Ges_del_days"
+)
+
+# ------------------------------------------------------------
+# Feature labels
+# ------------------------------------------------------------
+
+feature_labels <- c(
+  "Aspergillus" = "Aspergillus",
+  "Fusarium" = "Fusarium",
+  "Cryptococcus" = "Cryptococcus",
+  "Puccinia" = "Puccinia",
+  "Saccharomyces" = "Saccharomyces",
+  "Trichoderma" = "Trichoderma",
+  "Shenzhenivirus" = "Shenzhenivirus",
+  "Fohxhuevirus" = "Fohxhuevirus",
+  "IL37_pg_mL" = "IL-37",
+  "IL6" = "IL-6",
+  "Succinate" = "Succinate",
+  "Lactate" = "Lactate",
+  "Putrescine" = "Putrescine",
+  "Ges_del_days" = "Gestational age at delivery (days)"
+)
+
+# ------------------------------------------------------------
+# Read metadata
+# ------------------------------------------------------------
+
+meta <- read.delim(
+  metadata_file_tsv,
+  sep = "\t",
+  check.names = FALSE
+)
+
+colnames(meta)[1] <- "sample_label"
+
+meta$bmi <- as.numeric(meta$bmi)
+
+# ------------------------------------------------------------
+# Read microbial matrices
+# ------------------------------------------------------------
+
+fungal_mat <- read.delim(
+  fungal_file,
+  row.names = 1,
+  check.names = FALSE
+)
+
+viral_mat <- read.delim(
+  viral_file,
+  row.names = 1,
+  check.names = FALSE
+)
+
+# ------------------------------------------------------------
+# Clean sequencing IDs
+# ------------------------------------------------------------
+
+rownames(fungal_mat) <- sub("_1$", "", rownames(fungal_mat))
+rownames(viral_mat) <- sub("_1$", "", rownames(viral_mat))
+
+shared_ids <- Reduce(
+  intersect,
+  list(
+    rownames(fungal_mat),
+    rownames(viral_mat),
+    meta$reads_ID
+  )
+)
+
+if (length(shared_ids) == 0) {
+  stop("No shared sample IDs found across fungal, viral, and metadata files.")
+}
+
+fungal_mat <- fungal_mat[shared_ids, , drop = FALSE]
+viral_mat <- viral_mat[shared_ids, , drop = FALSE]
+
+meta <- meta[
+  match(shared_ids, meta$reads_ID),
+]
+
+if (!all(meta$reads_ID == shared_ids)) {
+  stop("Metadata order mismatch after matching.")
+}
+
+# ------------------------------------------------------------
+# Check that requested features are present
+# ------------------------------------------------------------
+
+missing_fungi <- setdiff(fungal_candidates, colnames(fungal_mat))
+missing_viruses <- setdiff(viral_candidates, colnames(viral_mat))
+missing_host <- setdiff(host_features, colnames(meta))
+
+if (length(missing_fungi) > 0) {
+  warning("Missing fungal taxa: ", paste(missing_fungi, collapse = ", "))
+}
+
+if (length(missing_viruses) > 0) {
+  warning("Missing viral taxa: ", paste(missing_viruses, collapse = ", "))
+}
+
+if (length(missing_host) > 0) {
+  warning("Missing host features: ", paste(missing_host, collapse = ", "))
+}
+
+fungal_present <- intersect(fungal_candidates, colnames(fungal_mat))
+viral_present <- intersect(viral_candidates, colnames(viral_mat))
+host_present <- intersect(host_features, colnames(meta))
+
+# ------------------------------------------------------------
+# Build microbial and host matrices
+# ------------------------------------------------------------
+
+microbial_profile <- cbind(
+  fungal_mat[, fungal_present, drop = FALSE],
+  viral_mat[, viral_present, drop = FALSE]
+)
+
+host_profile <- meta[, host_present, drop = FALSE]
+
+microbial_profile <- as.data.frame(microbial_profile)
+host_profile <- as.data.frame(host_profile)
+
+microbial_profile[] <- lapply(
+  microbial_profile,
+  function(x) as.numeric(as.character(x))
+)
+
+host_profile[] <- lapply(
+  host_profile,
+  function(x) as.numeric(as.character(x))
+)
+
+rownames(microbial_profile) <- meta$reads_ID
+rownames(host_profile) <- meta$reads_ID
+
+# ------------------------------------------------------------
+# Remove unusable features
+# ------------------------------------------------------------
+
+keep_microbes <- sapply(microbial_profile, function(x) {
+  sum(!is.na(x)) >= 5 && sd(x, na.rm = TRUE) > 0
+})
+
+keep_host <- sapply(host_profile, function(x) {
+  sum(!is.na(x)) >= 5 && sd(x, na.rm = TRUE) > 0
+})
+
+microbial_profile <- microbial_profile[, keep_microbes, drop = FALSE]
+host_profile <- host_profile[, keep_host, drop = FALSE]
+
+# ------------------------------------------------------------
+# Run targeted Spearman correlations
+# Microbial taxa are tested only against host/clinical features
+# ------------------------------------------------------------
+
+cor_results <- list()
+
+for (microbe in colnames(microbial_profile)) {
+  
+  for (host in colnames(host_profile)) {
+    
+    test_df <- data.frame(
+      microbe_value = microbial_profile[[microbe]],
+      host_value = host_profile[[host]]
+    ) %>%
+      filter(!is.na(microbe_value), !is.na(host_value))
+    
+    if (nrow(test_df) >= 5) {
+      
+      cor_test <- suppressWarnings(
+        cor.test(
+          test_df$microbe_value,
+          test_df$host_value,
+          method = "spearman",
+          exact = FALSE
+        )
+      )
+      
+      cor_results[[paste(microbe, host, sep = "___")]] <- data.frame(
+        microbial_feature = microbe,
+        host_feature = host,
+        n_samples = nrow(test_df),
+        spearman_rho = unname(cor_test$estimate),
+        p_value = cor_test$p.value
+      )
+    }
+  }
+}
+
+cor_results_df <- bind_rows(cor_results) %>%
+  mutate(
+    q_value = p.adjust(p_value, method = "BH"),
+    direction = case_when(
+      spearman_rho > 0 ~ "positive",
+      spearman_rho < 0 ~ "negative",
+      TRUE ~ "none"
+    )
+  ) %>%
+  arrange(p_value)
+
+write.csv(
+  cor_results_df,
+  file.path(out_dir, "targeted_microbe_host_spearman_results.csv"),
+  row.names = FALSE
+)
+
+# ------------------------------------------------------------
+# Convert targeted correlations into heatmap matrices
+# ------------------------------------------------------------
+
+rho_matrix <- matrix(
+  NA,
+  nrow = ncol(microbial_profile),
+  ncol = ncol(host_profile),
+  dimnames = list(
+    colnames(microbial_profile),
+    colnames(host_profile)
+  )
+)
+
+q_matrix <- rho_matrix
+p_matrix <- rho_matrix
+
+for (i in seq_len(nrow(cor_results_df))) {
+  
+  microbe <- cor_results_df$microbial_feature[i]
+  host <- cor_results_df$host_feature[i]
+  
+  rho_matrix[microbe, host] <- cor_results_df$spearman_rho[i]
+  p_matrix[microbe, host] <- cor_results_df$p_value[i]
+  q_matrix[microbe, host] <- cor_results_df$q_value[i]
+}
+
+write.csv(rho_matrix, file.path(out_dir, "targeted_microbe_host_rho_matrix.csv"))
+write.csv(p_matrix, file.path(out_dir, "targeted_microbe_host_pvalue_matrix.csv"))
+write.csv(q_matrix, file.path(out_dir, "targeted_microbe_host_qvalue_matrix.csv"))
+
+# ------------------------------------------------------------
+# Targeted microbe-host correlation heatmap
+# ------------------------------------------------------------
+
+rho_matrix_plot <- rho_matrix
+
+rownames(rho_matrix_plot) <- feature_labels[rownames(rho_matrix_plot)]
+colnames(rho_matrix_plot) <- feature_labels[colnames(rho_matrix_plot)]
+
+heatmap_colours <- colorRampPalette(
+  c("#313695", "#74add1", "white", "#f46d43", "#a50026")
+)(100)
+
+pheatmap(
+  rho_matrix_plot,
+  color = heatmap_colours,
+  breaks = seq(-1, 1, length.out = 101),
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  show_rownames = TRUE,
+  show_colnames = TRUE,
+  display_numbers = TRUE,
+  number_format = "%.2f",
+  fontsize_col = 9,
+  fontsize_row = 9,
+  angle_col = 45,
+  border_color = NA,
+  main = "Associations between candidate microbial taxa and host features",
+  filename = file.path(
+    fig_out_dir,
+    "targeted_microbe_host_correlation_heatmap.png"
+  ),
+  width = 8,
+  height = 6
+)
+
+# ------------------------------------------------------------
+# Sample-level integrated profile heatmap
+# ------------------------------------------------------------
+
+# Create delivery group using your strict colour scheme
+meta$birth_group <- dplyr::case_when(
+  meta$outcome == "TERM" ~ "TERM",
+  meta$outcome == "sPTB" & meta$sPTB34 == "no" ~ "sPTB 34–37",
+  meta$outcome == "sPTB" & meta$sPTB34 == "yes" ~ "sPTB <34",
+  TRUE ~ NA_character_
+)
+
+# Combine microbial and host features
+integrated_profile <- cbind(
+  microbial_profile,
+  host_profile
+)
+
+# Keep samples as rows and features as columns
+heat_mat <- integrated_profile
+
+# Log-transform microbial abundance columns only
+microbial_cols <- colnames(microbial_profile)
+
+pseudocount <- 1e-6
+
+heat_mat[, microbial_cols] <- log10(heat_mat[, microbial_cols] + pseudocount)
+
+# Convert all features to comparable z-scores
+heat_mat <- scale(heat_mat)
+
+colnames(heat_mat) <- feature_labels[colnames(heat_mat)]
+
+# Use sample labels as rownames for internal matching, but do not display them
+rownames(heat_mat) <- meta$sample_label
+
+# Row annotation: delivery group
+row_annotation <- data.frame(
+  Delivery_group = meta$birth_group
+)
+
+rownames(row_annotation) <- meta$sample_label
+
+# Match your existing delivery-group colours
+annotation_colours <- list(
+  Delivery_group = c(
+    "TERM" = "#1f77b4",
+    "sPTB 34–37" = "#9467bd",
+    "sPTB <34" = "#ff7f0e"
+  )
+)
+
+# Match your existing heatmap colour palette
+heatmap_colours <- colorRampPalette(
+  c("#440154", "#31688e", "#35b779", "#fde725")
+)(100)
+
+pheatmap(
+  heat_mat,
+  color = heatmap_colours,
+  annotation_row = row_annotation,
+  annotation_colors = annotation_colours,
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  show_rownames = FALSE,
+  show_colnames = TRUE,
+  scale = "none",
+  fontsize_col = 8,
+  fontsize_row = 6,
+  angle_col = 90,
+  border_color = NA,
+  main = "Integrated microbial and host feature profile",
+  filename = file.path(
+    fig_out_dir,
+    "sample_level_integrated_profile_heatmap.png"
+  ),
+  width = 10,
+  height = 7
+)
+
+# ------------------------------------------------------------
+# Scatterplots for strongest targeted correlations
+# ------------------------------------------------------------
+
+plot_df <- cbind(
+  reads_ID = meta$reads_ID,
+  sample_label = meta$sample_label,
+  outcome = meta$outcome,
+  sPTB34 = meta$sPTB34,
+  microbial_profile,
+  host_profile
+) %>%
+  as.data.frame()
+
+top_pairs <- cor_results_df %>%
+  filter(!is.na(p_value)) %>%
+  arrange(p_value) %>%
+  slice_head(n = 10)
+
+for (i in seq_len(nrow(top_pairs))) {
+  
+  microbe <- top_pairs$microbial_feature[i]
+  host <- top_pairs$host_feature[i]
+  
+  microbe_label <- feature_labels[microbe]
+  host_label <- feature_labels[host]
+  
+  p <- ggplot(
+    plot_df,
+    aes(
+      x = .data[[microbe]],
+      y = .data[[host]],
+      colour = outcome
+    )
+  ) +
+    geom_point(size = 2.5, alpha = 0.85) +
+    geom_smooth(method = "lm", se = FALSE, linewidth = 0.6) +
+    scale_colour_manual(
+      values = c(
+        "TERM" = "#1f77b4",
+        "sPTB" = "#ff7f0e"
+      )
+    ) +
+    theme_bw() +
+    labs(
+      title = paste(microbe_label, "vs", host_label),
+      subtitle = paste0(
+        "\u03c1 = ",
+        round(top_pairs$spearman_rho[i], 2),
+        ", p = ",
+        signif(top_pairs$p_value[i], 2),
+        ", FDR = ",
+        signif(top_pairs$q_value[i], 2)
+      ),
+      x = microbe_label,
+      y = host_label,
+      colour = "Outcome"
+    )
+  
+  safe_name <- paste0(
+    "scatter_",
+    i,
+    "_",
+    gsub("[^A-Za-z0-9]", "_", microbe),
+    "_vs_",
+    gsub("[^A-Za-z0-9]", "_", host),
+    ".png"
+  )
+  
+  ggsave(
+    filename = file.path(fig_out_dir, safe_name),
+    plot = p,
+    width = 6.5,
+    height = 5,
+    dpi = 300
+  )
+}
+
+# ------------------------------------------------------------
+# Save analysis summary
+# ------------------------------------------------------------
+
+summary_table <- data.frame(
+  item = c(
+    "Samples included",
+    "Fungal taxa included",
+    "Viral taxa included",
+    "Host features included",
+    "Total targeted correlations tested"
+  ),
+  value = c(
+    nrow(microbial_profile),
+    paste(intersect(fungal_present, colnames(microbial_profile)), collapse = ", "),
+    paste(intersect(viral_present, colnames(microbial_profile)), collapse = ", "),
+    paste(colnames(host_profile), collapse = ", "),
+    nrow(cor_results_df)
+  )
+)
+
+write.csv(
+  summary_table,
+  file.path(out_dir, "targeted_integrated_profile_summary.csv"),
+  row.names = FALSE
+)
+
+cat("\nIntegrated fungal–viral–host profile analysis complete.\n")
+cat("Results saved to:\n", out_dir, "\n")
+cat("Figures saved to:\n", fig_out_dir, "\n")
+```
+

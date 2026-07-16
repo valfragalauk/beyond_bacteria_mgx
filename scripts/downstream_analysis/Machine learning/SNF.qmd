@@ -1,0 +1,962 @@
+---
+title: "SNF"
+format: html
+---
+
+```{r}
+install.packages(c(
+  "SNFtool",
+  "dplyr",
+  "ggplot2",
+  "pheatmap",
+  "ggalluvial",
+  "tibble",
+  "tidyr"
+))
+```
+
+```{r}
+# ============================================================
+# Similarity Network Fusion analysis
+# Integrated fungal, viral and host profile
+# ============================================================
+
+suppressPackageStartupMessages({
+  library(SNFtool)
+  library(dplyr)
+  library(tidyr)
+  library(tibble)
+  library(ggplot2)
+  library(pheatmap)
+  library(ggalluvial)
+})
+
+set.seed(123)
+
+# ============================================================
+# Paths
+# ============================================================
+
+project_root <- "C:/Users/valfr/OneDrive/Documents/Masters/Research Project"
+data_dir     <- file.path(project_root, "Data")
+results_dir  <- file.path(project_root, "Results")
+figures_dir  <- file.path(project_root, "Figures")
+
+snf_results_dir <- file.path(results_dir, "SNF")
+snf_figures_dir <- file.path(figures_dir, "SNF")
+
+dir.create(snf_results_dir, showWarnings = FALSE, recursive = TRUE)
+dir.create(snf_figures_dir, showWarnings = FALSE, recursive = TRUE)
+
+metadata_file_tsv <- file.path(data_dir, "metadata_clean.tsv")
+
+fungal_file <- file.path(
+  data_dir,
+  "refseq_fungal_genus_2pct.totalcount_gt_1.prevalence_0p02.tsv"
+)
+
+viral_file <- file.path(
+  data_dir,
+  "refseq_viral_genus_2pct.totalcount_gt_1.prevalence_0p02.tsv"
+)
+
+# ============================================================
+# Read metadata
+# ============================================================
+
+meta <- read.delim(
+  metadata_file_tsv,
+  sep = "\t",
+  check.names = FALSE
+)
+
+colnames(meta)[1] <- "sample_label"
+
+# ============================================================
+# Colour maps
+# ============================================================
+
+outcome_cols <- c(
+  "TERM" = "#1f77b4",
+  "sPTB" = "#ff7f0e"
+)
+
+delivery_cols <- c(
+  "TERM" = "#1f77b4",
+  "sPTB 34–37" = "#9467bd",
+  "sPTB <34" = "#ff7f0e"
+)
+
+cluster_cols <- c(
+  "Cluster 1" = "#0072B2",
+  "Cluster 2" = "#E69F00",
+  "Cluster 3" = "#009E73",
+  "Cluster 4" = "#CC79A7"
+)
+
+get_fungal_color_map <- function() {
+  c(
+    "Aspergillus"   = "#E69F00",
+    "Saccharomyces" = "#56B4E9",
+    "Fusarium"      = "#44AA99",
+    "Trichoderma"   = "#CC6677",
+    "Cryptococcus"  = "#117733",
+    "Puccinia"      = "#AA4499"
+  )
+}
+
+get_viral_color_map <- function() {
+  c(
+    "Shenzhenivirus" = "#CC79A7",
+    "Fohxhuevirus"  = "#882255"
+  )
+}
+
+# ============================================================
+# Helper functions
+# ============================================================
+
+read_matrix <- function(file_path) {
+  mat <- read.delim(
+    file_path,
+    row.names = 1,
+    check.names = FALSE
+  )
+
+  mat <- as.data.frame(mat)
+  mat[] <- lapply(mat, function(x) as.numeric(as.character(x)))
+
+  return(mat)
+}
+
+align_to_metadata <- function(mat, meta) {
+  matrix_ids_clean <- sub("_1$", "", rownames(mat))
+
+  unmatched <- setdiff(matrix_ids_clean, meta$reads_ID)
+
+  if (length(unmatched) > 0) {
+    stop("Unmatched samples found: ", paste(unmatched, collapse = ", "))
+  }
+
+  meta_matched <- meta[
+    match(matrix_ids_clean, meta$reads_ID),
+  ]
+
+  if (!all(meta_matched$reads_ID == matrix_ids_clean)) {
+    stop("Metadata order mismatch")
+  }
+
+  rownames(mat) <- matrix_ids_clean
+  rownames(meta_matched) <- meta_matched$reads_ID
+
+  return(list(mat = mat, meta = meta_matched))
+}
+
+select_existing_features <- function(mat, features, layer_name) {
+  present <- intersect(features, colnames(mat))
+  missing <- setdiff(features, colnames(mat))
+
+  if (length(missing) > 0) {
+    message("Missing in ", layer_name, ": ", paste(missing, collapse = ", "))
+  }
+
+  if (length(present) == 0) {
+    stop("No requested features found in ", layer_name)
+  }
+
+  mat[, present, drop = FALSE]
+}
+
+clr_transform <- function(mat) {
+  mat <- as.matrix(mat)
+
+  min_positive <- min(mat[mat > 0], na.rm = TRUE)
+
+  if (!is.finite(min_positive)) {
+    stop("No positive values available for CLR transformation.")
+  }
+
+  pseudocount <- min_positive / 2
+  mat_pc <- mat + pseudocount
+
+  clr <- t(apply(mat_pc, 1, function(x) {
+    log(x) - mean(log(x))
+  }))
+
+  clr <- as.data.frame(clr)
+  rownames(clr) <- rownames(mat)
+
+  return(clr)
+}
+
+zscore_matrix <- function(mat) {
+  mat <- as.data.frame(mat)
+
+  mat <- mat[, apply(mat, 2, function(x) {
+    sd(x, na.rm = TRUE) > 0
+  }), drop = FALSE]
+
+  scaled <- scale(mat)
+  scaled[is.na(scaled)] <- 0
+
+  scaled <- as.data.frame(scaled)
+  rownames(scaled) <- rownames(mat)
+
+  return(scaled)
+}
+
+format_feature_names <- function(x) {
+  recode(
+    x,
+    "IL6" = "IL-6",
+    "IL37_pg_mL" = "IL-37",
+    "Lactate" = "Lactate",
+    "Succinate" = "Succinate",
+    "Putrescine" = "Putrescine"
+  )
+}
+
+make_affinity_matrix <- function(layer, K = 10, sigma = 0.5) {
+  layer <- as.matrix(layer)
+  distance_matrix <- dist2(layer, layer)
+
+  affinityMatrix(
+    distance_matrix,
+    K = K,
+    sigma = sigma
+  )
+}
+
+choose_cluster_number <- function(fused_network, k_values = 2:4) {
+  distance_object <- as.dist(1 - fused_network)
+
+  cluster_summary <- lapply(k_values, function(k) {
+    clusters <- spectralClustering(fused_network, K = k)
+
+    sil <- cluster::silhouette(
+      clusters,
+      distance_object
+    )
+
+    data.frame(
+      k = k,
+      mean_silhouette = mean(sil[, "sil_width"])
+    )
+  }) %>%
+    bind_rows()
+
+  best_k <- cluster_summary$k[
+    which.max(cluster_summary$mean_silhouette)
+  ]
+
+  return(list(
+    cluster_summary = cluster_summary,
+    best_k = best_k
+  ))
+}
+
+# ============================================================
+# Read and align fungal and viral data
+# ============================================================
+
+fungi <- read_matrix(fungal_file)
+fungi_aligned <- align_to_metadata(fungi, meta)
+
+fungi <- fungi_aligned$mat
+meta_aligned <- fungi_aligned$meta
+
+viruses <- read_matrix(viral_file)
+viruses_aligned <- align_to_metadata(viruses, meta)
+
+viruses <- viruses_aligned$mat
+
+# ============================================================
+# Define selected features
+# ============================================================
+
+fungal_candidates <- c(
+  "Aspergillus",
+  "Fusarium",
+  "Cryptococcus",
+  "Puccinia",
+  "Saccharomyces",
+  "Trichoderma"
+)
+
+viral_candidates <- c(
+  "Shenzhenivirus",
+  "Fohxhuevirus"
+)
+
+host_features <- c(
+  "IL6",
+  "IL37_pg_mL",
+  "Lactate",
+  "Succinate",
+  "Putrescine"
+)
+
+# ============================================================
+# Check that metadata-derived host features exist
+# ============================================================
+
+missing_host_features <- setdiff(
+  host_features,
+  colnames(meta_aligned)
+)
+
+if (length(missing_host_features) > 0) {
+  stop(
+    "These required host features are missing from metadata_clean.tsv: ",
+    paste(missing_host_features, collapse = ", ")
+  )
+}
+
+# ============================================================
+# Prepare SNF layers
+# ============================================================
+
+fungal_layer <- fungi %>%
+  select_existing_features(fungal_candidates, "RefSeq fungi") %>%
+  clr_transform() %>%
+  zscore_matrix()
+
+viral_layer <- viruses %>%
+  select_existing_features(viral_candidates, "RefSeq viruses") %>%
+  clr_transform() %>%
+  zscore_matrix()
+
+host_layer <- meta_aligned[, host_features, drop = FALSE]
+host_layer[] <- lapply(
+  host_layer,
+  function(x) as.numeric(as.character(x))
+)
+rownames(host_layer) <- meta_aligned$reads_ID
+host_layer <- zscore_matrix(host_layer)
+
+# ============================================================
+# Match samples across all layers
+# ============================================================
+
+common_samples <- Reduce(
+  intersect,
+  list(
+    rownames(fungal_layer),
+    rownames(viral_layer),
+    rownames(host_layer)
+  )
+)
+
+metadata_model <- meta_aligned[
+  common_samples,
+  c("reads_ID", "sample_label", "outcome", "sPTB34"),
+  drop = FALSE
+]
+
+# ============================================================
+# Remove samples with missing outcome or model features
+# ============================================================
+
+complete_sample_check <- bind_cols(
+  metadata_model,
+  fungal_layer[common_samples, , drop = FALSE],
+  viral_layer[common_samples, , drop = FALSE],
+  host_layer[common_samples, , drop = FALSE]
+)
+
+complete_samples <- complete_sample_check$reads_ID[
+  complete.cases(complete_sample_check)
+]
+
+metadata_model <- metadata_model[complete_samples, , drop = FALSE]
+
+fungal_layer <- fungal_layer[complete_samples, , drop = FALSE]
+viral_layer <- viral_layer[complete_samples, , drop = FALSE]
+host_layer <- host_layer[complete_samples, , drop = FALSE]
+
+# ============================================================
+# Build similarity networks
+# ============================================================
+
+K <- 10
+sigma <- 0.5
+t <- 20
+
+fungal_network <- make_affinity_matrix(
+  fungal_layer,
+  K = K,
+  sigma = sigma
+)
+
+viral_network <- make_affinity_matrix(
+  viral_layer,
+  K = K,
+  sigma = sigma
+)
+
+host_network <- make_affinity_matrix(
+  host_layer,
+  K = K,
+  sigma = sigma
+)
+
+network_list <- list(
+  fungal_network,
+  viral_network,
+  host_network
+)
+
+# ============================================================
+# Run Similarity Network Fusion
+# ============================================================
+
+fused_network <- SNF(
+  Wall = network_list,
+  K = K,
+  t = t
+)
+
+rownames(fused_network) <- complete_samples
+colnames(fused_network) <- complete_samples
+
+saveRDS(
+  fused_network,
+  file.path(snf_results_dir, "SNF_fused_network.rds")
+)
+
+# ============================================================
+# Spectral clustering and cluster number selection
+# ============================================================
+
+cluster_selection <- choose_cluster_number(
+  fused_network,
+  k_values = 2:4
+)
+
+write.csv(
+  cluster_selection$cluster_summary,
+  file.path(snf_results_dir, "SNF_cluster_number_silhouette_summary.csv"),
+  row.names = FALSE
+)
+
+best_k <- cluster_selection$best_k
+
+snf_clusters <- spectralClustering(
+  fused_network,
+  K = best_k
+)
+
+cluster_df <- data.frame(
+  reads_ID = complete_samples,
+  sample_label = metadata_model$sample_label,
+  SNF_cluster = paste0("Cluster ", snf_clusters),
+  outcome = metadata_model$outcome,
+  sPTB34 = metadata_model$sPTB34
+)
+
+# ============================================================
+# Create three delivery groups
+# ============================================================
+
+cluster_df$delivery_group <- NA
+
+cluster_df$delivery_group[
+  cluster_df$outcome == "TERM"
+] <- "TERM"
+
+cluster_df$delivery_group[
+  cluster_df$outcome == "sPTB" &
+    cluster_df$sPTB34 == "yes"
+] <- "sPTB <34"
+
+cluster_df$delivery_group[
+  cluster_df$outcome == "sPTB" &
+    cluster_df$sPTB34 == "no"
+] <- "sPTB 34–37"
+
+cluster_df$delivery_group <- factor(
+  cluster_df$delivery_group,
+  levels = c(
+    "TERM",
+    "sPTB 34–37",
+    "sPTB <34"
+  )
+)
+
+write.csv(
+  cluster_df,
+  file.path(snf_results_dir, "SNF_sample_clusters.csv"),
+  row.names = FALSE
+)
+
+# ============================================================
+# Test association between SNF clusters and outcomes
+# ============================================================
+
+cluster_outcome_table <- table(
+  cluster_df$SNF_cluster,
+  cluster_df$outcome
+)
+
+cluster_sPTB34_table <- table(
+  cluster_df$SNF_cluster,
+  cluster_df$sPTB34
+)
+
+cluster_delivery_table <- table(
+  cluster_df$SNF_cluster,
+  cluster_df$delivery_group
+)
+
+cluster_outcome_test <- fisher.test(cluster_outcome_table)
+cluster_sPTB34_test <- fisher.test(cluster_sPTB34_table)
+
+cluster_delivery_test <- chisq.test(
+  cluster_delivery_table,
+  simulate.p.value = TRUE,
+  B = 10000
+)
+
+cluster_tests <- data.frame(
+  comparison = c(
+    "SNF cluster vs outcome",
+    "SNF cluster vs sPTB34",
+    "SNF cluster vs delivery group"
+  ),
+  p_value = c(
+    cluster_outcome_test$p.value,
+    cluster_sPTB34_test$p.value,
+    cluster_delivery_test$p.value
+  )
+)
+
+write.csv(
+  cluster_tests,
+  file.path(snf_results_dir, "SNF_cluster_outcome_tests.csv"),
+  row.names = FALSE
+)
+
+write.csv(
+  as.data.frame(cluster_outcome_table),
+  file.path(snf_results_dir, "SNF_cluster_by_outcome_table.csv"),
+  row.names = FALSE
+)
+
+write.csv(
+  as.data.frame(cluster_sPTB34_table),
+  file.path(snf_results_dir, "SNF_cluster_by_sPTB34_table.csv"),
+  row.names = FALSE
+)
+
+write.csv(
+  as.data.frame(cluster_delivery_table),
+  file.path(snf_results_dir, "SNF_cluster_by_delivery_group_table.csv"),
+  row.names = FALSE
+)
+
+# ============================================================
+# Test feature differences across SNF clusters
+# ============================================================
+
+feature_matrix <- bind_cols(
+  fungal_layer,
+  viral_layer,
+  host_layer
+)
+
+feature_tests <- lapply(colnames(feature_matrix), function(feature) {
+  test_df <- data.frame(
+    value = feature_matrix[[feature]],
+    SNF_cluster = cluster_df$SNF_cluster
+  )
+
+  kw <- kruskal.test(value ~ SNF_cluster, data = test_df)
+
+  data.frame(
+    feature = feature,
+    feature_label = format_feature_names(feature),
+    p_value = kw$p.value
+  )
+}) %>%
+  bind_rows() %>%
+  mutate(
+    q_value = p.adjust(p_value, method = "BH")
+  ) %>%
+  arrange(q_value)
+
+write.csv(
+  feature_tests,
+  file.path(snf_results_dir, "SNF_cluster_feature_tests.csv"),
+  row.names = FALSE
+)
+
+# ============================================================
+# Prepare feature heatmap matrix
+# ============================================================
+
+feature_matrix_plot <- feature_matrix
+colnames(feature_matrix_plot) <- format_feature_names(colnames(feature_matrix_plot))
+
+feature_matrix_plot <- as.matrix(feature_matrix_plot)
+
+annotation_col <- cluster_df %>%
+  select(reads_ID, SNF_cluster, outcome, sPTB34, delivery_group) %>%
+  as.data.frame()
+
+rownames(annotation_col) <- annotation_col$reads_ID
+annotation_col$reads_ID <- NULL
+
+annotation_col <- annotation_col[colnames(t(feature_matrix_plot)), , drop = FALSE]
+
+annotation_colors <- list(
+  SNF_cluster = cluster_cols,
+  outcome = outcome_cols,
+  sPTB34 = c(
+    "yes" = "#ff7f0e",
+    "no" = "#1f77b4"
+  ),
+  delivery_group = delivery_cols
+)
+
+# ============================================================
+# Fused similarity matrix heatmap
+# ============================================================
+
+annotation_network <- cluster_df %>%
+  select(reads_ID, delivery_group, SNF_cluster) %>%
+  as.data.frame()
+
+rownames(annotation_network) <- annotation_network$reads_ID
+annotation_network$reads_ID <- NULL
+
+annotation_network <- annotation_network[
+  rownames(fused_network),
+  ,
+  drop = FALSE
+]
+
+# Rename annotation labels
+colnames(annotation_network) <- c(
+  "Outcome",
+  "SNF cluster"
+)
+
+# Annotation colours
+annotation_colors_network <- list(
+  "Outcome" = delivery_cols,
+  "SNF cluster" = cluster_cols
+)
+
+# Heatmap
+pheatmap(
+  fused_network,
+  annotation_row = annotation_network,
+  annotation_col = annotation_network,
+  annotation_colors = annotation_colors_network,
+
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+
+  show_rownames = FALSE,
+  show_colnames = FALSE,
+
+  border_color = NA,
+
+  color = viridis::viridis(100),
+
+  breaks = seq(
+    min(fused_network),
+    max(fused_network),
+    length.out = 101
+  ),
+
+  main = "SNF fused similarity network",
+
+  filename = file.path(
+    snf_figures_dir,
+    "SNF_fused_similarity_heatmap.png"
+  ),
+
+  width = 8,
+  height = 7
+)
+# ============================================================
+# Feature heatmap ordered by SNF cluster
+# ============================================================
+
+feature_matrix_plot <- feature_matrix
+colnames(feature_matrix_plot) <- format_feature_names(colnames(feature_matrix_plot))
+
+feature_matrix_plot <- as.matrix(feature_matrix_plot)
+
+ordered_samples <- cluster_df %>%
+  arrange(SNF_cluster, delivery_group) %>%
+  pull(reads_ID)
+
+feature_heatmap <- t(feature_matrix_plot[ordered_samples, , drop = FALSE])
+
+annotation_col_heatmap <- cluster_df %>%
+  select(reads_ID, SNF_cluster, delivery_group) %>%
+  as.data.frame()
+
+rownames(annotation_col_heatmap) <- annotation_col_heatmap$reads_ID
+annotation_col_heatmap$reads_ID <- NULL
+
+annotation_col_heatmap <- annotation_col_heatmap[
+  ordered_samples,
+  ,
+  drop = FALSE
+]
+
+# Rename annotation labels shown on the heatmap
+colnames(annotation_col_heatmap) <- c(
+  "SNF cluster",
+  "Outcome"
+)
+
+annotation_colors_heatmap <- list(
+  "SNF cluster" = cluster_cols,
+  "Outcome" = delivery_cols
+)
+
+pheatmap(
+  feature_heatmap,
+  annotation_col = annotation_col_heatmap,
+  annotation_colors = annotation_colors_heatmap,
+  cluster_cols = TRUE,
+  cluster_rows = TRUE,
+  show_colnames = FALSE,
+  show_rownames = TRUE,
+  fontsize_row = 10,
+  fontsize_col = 6,
+  border_color = NA,
+  color = colorRampPalette(
+    c("#440154", "#21908C", "#FDE725")
+  )(100),
+  main = "Integrated fungal, viral and host features",
+  filename = file.path(
+    snf_figures_dir,
+    "SNF_feature_heatmap_ordered_by_cluster.png"
+  ),
+  width = 9,
+  height = 6
+)
+
+# ============================================================
+# SNF PCoA coordinates
+# ============================================================
+
+snf_distance <- as.dist(1 - fused_network)
+
+snf_coords <- cmdscale(
+  snf_distance,
+  k = 2,
+  eig = TRUE
+)
+
+coord_df <- as.data.frame(snf_coords$points)
+colnames(coord_df) <- c("SNF1", "SNF2")
+coord_df$reads_ID <- rownames(coord_df)
+
+variance_explained <- round(
+  100 * snf_coords$eig[1:2] / sum(snf_coords$eig[snf_coords$eig > 0]),
+  1
+)
+
+plot_df <- coord_df %>%
+  left_join(cluster_df, by = "reads_ID")
+
+# ============================================================
+# PCoA coloured by SNF cluster
+# ============================================================
+
+p_cluster <- ggplot(plot_df, aes(x = SNF1, y = SNF2, colour = SNF_cluster)) +
+  geom_point(size = 3, alpha = 0.9) +
+  scale_colour_manual(values = cluster_cols) +
+  theme_bw(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold")
+  ) +
+  labs(
+    title = "SNF integrated sample structure",
+    x = paste0("SNF coordinate 1 (", variance_explained[1], "%)"),
+    y = paste0("SNF coordinate 2 (", variance_explained[2], "%)"),
+    colour = "SNF cluster"
+  )
+
+ggsave(
+  file.path(snf_figures_dir, "SNF_PCoA_by_cluster.png"),
+  p_cluster,
+  width = 7,
+  height = 5,
+  dpi = 300
+)
+
+print(p_cluster)
+
+# ============================================================
+# PCoA coloured by delivery group
+# ============================================================
+
+p_delivery <- ggplot(plot_df, aes(x = SNF1, y = SNF2, colour = delivery_group)) +
+  geom_point(size = 3, alpha = 0.9) +
+  scale_colour_manual(values = delivery_cols) +
+  theme_bw(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold")
+  ) +
+  labs(
+    title = "SNF integrated sample structure by delivery group",
+    x = paste0("SNF coordinate 1 (", variance_explained[1], "%)"),
+    y = paste0("SNF coordinate 2 (", variance_explained[2], "%)"),
+    colour = "Delivery group"
+  )
+
+ggsave(
+  file.path(snf_figures_dir, "SNF_PCoA_by_delivery_group.png"),
+  p_delivery,
+  width = 7,
+  height = 5,
+  dpi = 300
+)
+
+print(p_delivery)
+
+# ============================================================
+# Cluster composition bar plot
+# ============================================================
+
+cluster_composition <- cluster_df %>%
+  count(SNF_cluster, delivery_group) %>%
+  group_by(SNF_cluster) %>%
+  mutate(
+    proportion = n / sum(n)
+  ) %>%
+  ungroup()
+
+write.csv(
+  cluster_composition,
+  file.path(snf_results_dir, "SNF_cluster_composition.csv"),
+  row.names = FALSE
+)
+
+p_composition <- ggplot(
+  cluster_composition,
+  aes(x = SNF_cluster, y = proportion, fill = delivery_group)
+) +
+  geom_col(colour = "black", linewidth = 0.2) +
+  scale_fill_manual(values = delivery_cols) +
+  theme_bw(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold")
+  ) +
+  labs(
+    title = "Delivery group composition of SNF clusters",
+    x = "SNF cluster",
+    y = "Proportion of samples",
+    fill = "Delivery group"
+  )
+
+ggsave(
+  file.path(snf_figures_dir, "SNF_cluster_delivery_group_composition.png"),
+  p_composition,
+  width = 6,
+  height = 5,
+  dpi = 300
+)
+
+print(p_composition)
+
+# ============================================================
+# Alluvial plot: delivery group and SNF cluster
+# ============================================================
+
+alluvial_df <- cluster_df %>%
+  count(delivery_group, SNF_cluster)
+
+p_alluvial <- ggplot(
+  alluvial_df,
+  aes(
+    axis1 = delivery_group,
+    axis2 = SNF_cluster,
+    y = n
+  )
+) +
+  geom_alluvium(
+    aes(fill = delivery_group),
+    width = 0.18,
+    alpha = 0.8
+  ) +
+  geom_stratum(
+    width = 0.18,
+    fill = "grey90",
+    colour = "black",
+    linewidth = 0.5
+  ) +
+  geom_text(
+    stat = "stratum",
+    aes(label = after_stat(stratum)),
+    size = 2.6,
+    fontface = "bold"
+  ) +
+  scale_x_discrete(
+    limits = c("Delivery group", "SNF cluster"),
+    expand = c(0.2, 0.2)
+  ) +
+  scale_fill_manual(values = delivery_cols) +
+  theme_bw(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    legend.position = "right"
+  ) +
+  labs(
+    title = "Relationship between delivery group and SNF clusters",
+    y = "Number of samples",
+    fill = "Delivery group"
+  )
+
+ggsave(
+  file.path(
+    snf_figures_dir,
+    "SNF_delivery_group_cluster_alluvial.png"
+  ),
+  p_alluvial,
+  width = 8.5,
+  height = 5.5,
+  dpi = 300
+)
+
+print(p_alluvial)
+
+# ============================================================
+# Save full SNF object
+# ============================================================
+
+snf_object <- list(
+  fungal_layer = fungal_layer,
+  viral_layer = viral_layer,
+  host_layer = host_layer,
+  fungal_network = fungal_network,
+  viral_network = viral_network,
+  host_network = host_network,
+  fused_network = fused_network,
+  cluster_selection = cluster_selection,
+  clusters = cluster_df,
+  cluster_tests = cluster_tests,
+  feature_tests = feature_tests,
+  coordinates = plot_df
+)
+
+saveRDS(
+  snf_object,
+  file.path(snf_results_dir, "SNF_complete_object.rds")
+)
+
+# ============================================================
+# Save reproducibility information
+# ============================================================
+
+sink(file.path(snf_results_dir, "session_info.txt"))
+sessionInfo()
+sink()
+```

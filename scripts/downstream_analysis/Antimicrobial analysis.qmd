@@ -1,0 +1,191 @@
+---
+title: "IMD and antibiotics"
+format: html
+---
+
+```{r}
+# ============================================================
+# Antimicrobial exposure overlay on fungal and viral PCoA plots
+# ============================================================
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(ggplot2)
+  library(vegan)
+})
+
+# ------------------------------------------------------------
+# File paths
+# ------------------------------------------------------------
+
+project_root <- "C:/Users/valfr/OneDrive/Documents/Masters/Research Project"
+
+data_dir <- file.path(project_root, "Data")
+figures_dir <- file.path(project_root, "Figures")
+results_dir <- file.path(project_root, "Results")
+
+metadata_file_tsv <- file.path(data_dir, "metadata_clean.tsv")
+
+fungal_file <- file.path(
+  data_dir,
+  "refseq_fungal_genus_2pct.totalcount_gt_1.prevalence_0p02.tsv"
+)
+
+viral_file <- file.path(
+  data_dir,
+  "refseq_viral_genus_2pct.totalcount_gt_1.prevalence_0p02.tsv"
+)
+
+out_dir <- file.path(figures_dir, "antimicrobial_pcoa_overlay")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+# ------------------------------------------------------------
+# Read metadata
+# ------------------------------------------------------------
+
+meta <- read.delim(
+  metadata_file_tsv,
+  sep = "\t",
+  check.names = FALSE
+)
+
+colnames(meta)[1] <- "sample_label"
+
+# ------------------------------------------------------------
+# Function to generate antimicrobial PCoA overlay
+# ------------------------------------------------------------
+
+make_antimicrobial_pcoa <- function(matrix_file, dataset_label, output_prefix) {
+  
+  mat <- read.delim(
+    matrix_file,
+    row.names = 1,
+    check.names = FALSE
+  )
+  
+  matrix_ids_clean <- sub("_1$", "", rownames(mat))
+  
+  unmatched <- setdiff(matrix_ids_clean, meta$reads_ID)
+  
+  if (length(unmatched) > 0) {
+    stop("Unmatched samples found in ", dataset_label)
+  }
+  
+  meta_matched <- meta[
+    match(matrix_ids_clean, meta$reads_ID),
+  ]
+  
+  if (!all(meta_matched$reads_ID == matrix_ids_clean)) {
+    stop("Metadata order mismatch in ", dataset_label)
+  }
+  
+  rownames(mat) <- matrix_ids_clean
+  rownames(meta_matched) <- matrix_ids_clean
+  
+  mat <- mat[, colSums(mat, na.rm = TRUE) > 0, drop = FALSE]
+  mat <- mat[rowSums(mat, na.rm = TRUE) > 0, , drop = FALSE]
+  meta_matched <- meta_matched[rownames(mat), , drop = FALSE]
+  
+  rel_abund <- vegan::decostand(mat, method = "total")
+  bray <- vegan::vegdist(rel_abund, method = "bray")
+  
+  pcoa <- cmdscale(bray, eig = TRUE, k = 2)
+  
+  positive_eigs <- pcoa$eig[pcoa$eig > 0]
+  axis1_pct <- round(100 * positive_eigs[1] / sum(positive_eigs), 2)
+  axis2_pct <- round(100 * positive_eigs[2] / sum(positive_eigs), 2)
+  
+  pcoa_df <- data.frame(
+    reads_ID = rownames(rel_abund),
+    sample_label = meta_matched$sample_label,
+    Axis1 = pcoa$points[, 1],
+    Axis2 = pcoa$points[, 2],
+    outcome = meta_matched$outcome,
+    sPTB34 = meta_matched$sPTB34,
+    antimicrobial_status = meta_matched$currentlyonantibiotics_antiretroviral,
+    stringsAsFactors = FALSE
+  )
+  
+  pcoa_df$antimicrobial_status <- ifelse(
+    is.na(pcoa_df$antimicrobial_status),
+    "No recorded exposure",
+    pcoa_df$antimicrobial_status
+  )
+  
+  pcoa_df$antimicrobial_status <- factor(
+    pcoa_df$antimicrobial_status,
+    levels = c("No recorded exposure", "antibiotics", "antiviral")
+  )
+  
+  write.csv(
+    pcoa_df,
+    file.path(results_dir, paste0(output_prefix, "_pcoa_antimicrobial_coordinates.csv")),
+    row.names = FALSE
+  )
+  
+  p <- ggplot(
+    pcoa_df,
+    aes(
+      x = Axis1,
+      y = Axis2,
+      colour = antimicrobial_status
+    )
+  ) +
+    geom_point(size = 3, alpha = 0.85) +
+    scale_colour_manual(
+      values = c(
+        "No recorded exposure" = "grey70",
+        "antibiotics" = "#d73027",
+        "antiviral" = "#4575b4"
+      ),
+      labels = c(
+        "No recorded exposure",
+        "Antibiotics",
+        "Antivirals"
+      )
+    ) +
+    theme_classic(base_size = 13) +
+    labs(
+      title = paste0(dataset_label, " PCoA coloured by antimicrobial exposure"),
+      x = paste0("PCoA1 (", axis1_pct, "%)"),
+      y = paste0("PCoA2 (", axis2_pct, "%)"),
+      colour = "Antimicrobial exposure"
+    ) +
+    theme(
+      plot.title = element_text(size = 15, hjust = 0.5),
+      axis.line = element_line(linewidth = 0.3, colour = "black"),
+      axis.ticks = element_line(linewidth = 0.3, colour = "black")
+    )
+  
+  ggsave(
+    filename = file.path(out_dir, paste0(output_prefix, "_pcoa_antimicrobial_overlay.png")),
+    plot = p,
+    width = 7.4,
+    height = 5.4,
+    dpi = 300,
+    bg = "white"
+  )
+  
+  return(pcoa_df)
+}
+
+# ------------------------------------------------------------
+# Run fungal and viral antimicrobial overlays
+# ------------------------------------------------------------
+
+fungal_pcoa_antimicrobial <- make_antimicrobial_pcoa(
+  matrix_file = fungal_file,
+  dataset_label = "RefSeq fungal genus",
+  output_prefix = "refseq_fungal"
+)
+
+viral_pcoa_antimicrobial <- make_antimicrobial_pcoa(
+  matrix_file = viral_file,
+  dataset_label = "RefSeq viral genus",
+  output_prefix = "refseq_viral"
+)
+
+cat("\nAntimicrobial PCoA overlay plots complete.\n")
+cat("Figures saved to:\n", out_dir, "\n")
+```
+

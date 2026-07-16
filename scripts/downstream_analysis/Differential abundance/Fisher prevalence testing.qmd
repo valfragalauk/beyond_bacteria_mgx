@@ -1,0 +1,709 @@
+---
+title: "Fisher prevalence testing"
+format: html
+---
+
+
+```{r}
+############################################################
+
+# Aim:
+# Run RefSeq fungal and viral genus-level prevalence testing.
+
+# Fungal and viral WGS data are sparse and zero-inflated.
+# A taxon may not differ strongly in abundance, but may differ in
+# how often it is detected. This script tests presence/absence
+# differences by pregnancy outcome using Fisher's exact test.
+############################################################
+
+
+############################
+# 1. Load packages
+############################
+
+required_packages <- c(
+  "dplyr",
+  "tidyr",
+  "ggplot2",
+  "readr",
+  "stringr",
+  "tibble"
+)
+
+for (pkg in required_packages) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg)
+  }
+}
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(readr)
+library(stringr)
+library(tibble)
+
+
+############################
+# 2. Define file paths
+############################
+
+project_root <- "C:/Users/valfr/OneDrive/Documents/Masters/Research Project"
+
+data_dir <- file.path(project_root, "Data")
+results_dir <- file.path(project_root, "Results")
+figures_dir <- file.path(project_root, "Figures")
+
+metadata_file_tsv <- file.path(data_dir, "metadata_clean.tsv")
+
+fungal_file <- file.path(
+  data_dir,
+  "refseq_fungal_genus_2pct.totalcount_gt_1.prevalence_0p02.tsv"
+)
+
+viral_file <- file.path(
+  data_dir,
+  "refseq_viral_genus_2pct.totalcount_gt_1.prevalence_0p02.tsv"
+)
+
+results_dir <- file.path(results_dir, "RefSeq_prevalence_testing")
+figures_dir <- file.path(figures_dir, "RefSeq_prevalence_testing")
+
+dir.create(results_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(figures_dir, recursive = TRUE, showWarnings = FALSE)
+
+
+############################
+# 3. Read metadata safely
+############################
+
+
+meta <- read.delim(
+  metadata_file_tsv,
+  sep = "\t",
+  check.names = FALSE
+)
+
+
+colnames(meta)[1] <- "sample_label"
+
+# Ensure BMI is numeric for downstream compatibility, although BMI is not
+# used directly in Fisher prevalence testing.
+
+meta$bmi <- as.numeric(meta$bmi)
+
+
+############################
+# 4. Helper function:
+# read matrix and align metadata
+############################
+
+read_and_align_refseq_matrix <- function(matrix_file, meta) {
+  
+  # Read matrix with sequencing IDs as rownames.
+  # Rows = samples, columns = taxa.
+  
+  mat <- read.delim(
+    matrix_file,
+    row.names = 1,
+    check.names = FALSE
+  )
+  
+  # Remove possible trailing "_1" from matrix sample IDs.
+  matrix_ids_clean <- sub("_1$", "", rownames(mat))
+  
+  # Mandatory safety check: unmatched samples.
+  unmatched <- setdiff(matrix_ids_clean, meta$reads_ID)
+  
+  if (length(unmatched) > 0) {
+    stop(
+      paste(
+        "Unmatched samples found:",
+        paste(unmatched, collapse = ", ")
+      )
+    )
+  }
+  
+  # Match metadata using reads_ID only.
+  meta_aligned <- meta[
+    match(matrix_ids_clean, meta$reads_ID),
+  ]
+  
+  # Mandatory safety check: exact order.
+  if (!all(meta_aligned$reads_ID == matrix_ids_clean)) {
+    stop("Metadata order mismatch")
+  }
+  
+  # Explicitly set matrix rownames to cleaned sequencing IDs.
+  rownames(mat) <- matrix_ids_clean
+  
+  return(
+    list(
+      mat = mat,
+      meta = meta_aligned
+    )
+  )
+}
+
+
+############################
+# 5. Helper function:
+# Fisher prevalence testing
+############################
+
+run_prevalence_tests <- function(mat, meta, outcome_var, dataset_name) {
+  
+  if (!outcome_var %in% colnames(meta)) {
+    stop(paste("Outcome variable not found in metadata:", outcome_var))
+  }
+  
+  # Keep samples with non-missing outcome.
+  keep_samples <- !is.na(meta[[outcome_var]]) & meta[[outcome_var]] != ""
+  
+  mat_sub <- mat[keep_samples, , drop = FALSE]
+  meta_sub <- meta[keep_samples, , drop = FALSE]
+  
+  group <- as.factor(meta_sub[[outcome_var]])
+  
+  # Fisher's exact test is for two-group comparison.
+  if (length(levels(group)) != 2) {
+    stop(
+      paste(
+        "Outcome variable must have exactly two groups:",
+        outcome_var,
+        "has",
+        length(levels(group)),
+        "groups"
+      )
+    )
+  }
+  
+  group_levels <- levels(group)
+  group_1 <- group_levels[1]
+  group_2 <- group_levels[2]
+  
+  results_list <- list()
+  
+  for (taxon in colnames(mat_sub)) {
+    
+    abundance <- mat_sub[[taxon]]
+    
+    # Convert abundance to presence/absence.
+    # Present = abundance > 0
+    # Absent = abundance == 0
+    
+    presence <- ifelse(abundance > 0, 1, 0)
+    
+    test_df <- data.frame(
+      group = group,
+      presence = presence
+    )
+    
+    contingency_table <- table(test_df$group, test_df$presence)
+    
+    # Ensure both absence and presence columns exist.
+    if (!"0" %in% colnames(contingency_table)) {
+      contingency_table <- cbind(contingency_table, "0" = 0)
+    }
+    
+    if (!"1" %in% colnames(contingency_table)) {
+      contingency_table <- cbind(contingency_table, "1" = 0)
+    }
+    
+    contingency_table <- contingency_table[, c("0", "1"), drop = FALSE]
+    
+    fisher_result <- fisher.test(contingency_table)
+    
+    n_group_1 <- sum(group == group_1)
+    n_group_2 <- sum(group == group_2)
+    
+    present_group_1 <- sum(presence[group == group_1] == 1)
+    present_group_2 <- sum(presence[group == group_2] == 1)
+    
+    prevalence_group_1 <- present_group_1 / n_group_1
+    prevalence_group_2 <- present_group_2 / n_group_2
+    
+    prevalence_difference <- prevalence_group_2 - prevalence_group_1
+    
+    enriched_group <- case_when(
+      prevalence_difference > 0 ~ group_2,
+      prevalence_difference < 0 ~ group_1,
+      TRUE ~ "No difference"
+    )
+    
+    results_list[[taxon]] <- data.frame(
+      dataset = dataset_name,
+      outcome = outcome_var,
+      taxon = taxon,
+      group_1 = group_1,
+      group_2 = group_2,
+      n_group_1 = n_group_1,
+      n_group_2 = n_group_2,
+      present_group_1 = present_group_1,
+      present_group_2 = present_group_2,
+      prevalence_group_1 = prevalence_group_1,
+      prevalence_group_2 = prevalence_group_2,
+      prevalence_difference_group2_minus_group1 = prevalence_difference,
+      enriched_group = enriched_group,
+      odds_ratio = unname(fisher_result$estimate),
+      p_value = fisher_result$p.value
+    )
+  }
+  
+  results <- bind_rows(results_list)
+  
+  # Benjamini-Hochberg FDR correction is applied separately for each:
+  # dataset + outcome comparison.
+  
+  results <- results %>%
+    mutate(
+      q_value = p.adjust(p_value, method = "BH"),
+      nominal_signal = p_value < 0.05,
+      fdr_significant = q_value < 0.05
+    ) %>%
+    arrange(q_value, p_value)
+  
+  return(results)
+}
+
+
+############################
+# 6. Read and align RefSeq datasets
+############################
+
+fungal_aligned <- read_and_align_refseq_matrix(
+  matrix_file = fungal_file,
+  meta = meta
+)
+
+viral_aligned <- read_and_align_refseq_matrix(
+  matrix_file = viral_file,
+  meta = meta
+)
+
+fungal_mat <- fungal_aligned$mat
+fungal_meta <- fungal_aligned$meta
+
+viral_mat <- viral_aligned$mat
+viral_meta <- viral_aligned$meta
+
+
+############################
+# 7. Run prevalence testing
+############################
+
+# Primary comparison:
+# TERM vs sPTB
+
+fungal_outcome_results <- run_prevalence_tests(
+  mat = fungal_mat,
+  meta = fungal_meta,
+  outcome_var = "outcome",
+  dataset_name = "RefSeq fungi"
+)
+
+viral_outcome_results <- run_prevalence_tests(
+  mat = viral_mat,
+  meta = viral_meta,
+  outcome_var = "outcome",
+  dataset_name = "RefSeq viruses"
+)
+
+# Secondary comparison:
+# sPTB34 yes/no
+
+fungal_sptb34_results <- run_prevalence_tests(
+  mat = fungal_mat,
+  meta = fungal_meta,
+  outcome_var = "sPTB34",
+  dataset_name = "RefSeq fungi"
+)
+
+viral_sptb34_results <- run_prevalence_tests(
+  mat = viral_mat,
+  meta = viral_meta,
+  outcome_var = "sPTB34",
+  dataset_name = "RefSeq viruses"
+)
+
+
+############################
+# 8. Combine and save results
+############################
+
+all_prevalence_results <- bind_rows(
+  fungal_outcome_results,
+  fungal_sptb34_results,
+  viral_outcome_results,
+  viral_sptb34_results
+)
+
+write_csv(
+  fungal_outcome_results,
+  file.path(results_dir, "refseq_fungal_prevalence_TERM_vs_sPTB.csv")
+)
+
+write_csv(
+  fungal_sptb34_results,
+  file.path(results_dir, "refseq_fungal_prevalence_sPTB34_yes_no.csv")
+)
+
+write_csv(
+  viral_outcome_results,
+  file.path(results_dir, "refseq_viral_prevalence_TERM_vs_sPTB.csv")
+)
+
+write_csv(
+  viral_sptb34_results,
+  file.path(results_dir, "refseq_viral_prevalence_sPTB34_yes_no.csv")
+)
+
+write_csv(
+  all_prevalence_results,
+  file.path(results_dir, "refseq_all_prevalence_results.csv")
+)
+
+
+############################
+# 9. Create summary table
+############################
+
+prevalence_summary <- all_prevalence_results %>%
+  group_by(dataset, outcome) %>%
+  summarise(
+    n_taxa_tested = n(),
+    n_nominal_p_lt_0p05 = sum(nominal_signal, na.rm = TRUE),
+    n_fdr_q_lt_0p05 = sum(fdr_significant, na.rm = TRUE),
+    min_p_value = min(p_value, na.rm = TRUE),
+    min_q_value = min(q_value, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+write_csv(
+  prevalence_summary,
+  file.path(results_dir, "refseq_prevalence_testing_summary.csv")
+)
+
+print(prevalence_summary)
+
+
+############################
+# 10. Save nominal hits
+############################
+
+nominal_hits <- all_prevalence_results %>%
+  filter(nominal_signal == TRUE) %>%
+  arrange(dataset, outcome, p_value)
+
+write_csv(
+  nominal_hits,
+  file.path(results_dir, "refseq_prevalence_nominal_hits_p_lt_0p05.csv")
+)
+
+fdr_hits <- all_prevalence_results %>%
+  filter(fdr_significant == TRUE) %>%
+  arrange(dataset, outcome, q_value)
+
+write_csv(
+  fdr_hits,
+  file.path(results_dir, "refseq_prevalence_fdr_hits_q_lt_0p05.csv")
+)
+
+
+############################
+# 11. Plot top prevalence signals
+############################
+
+plot_top_prevalence <- function(results, output_filename, top_n = 15) {
+  
+  plot_df <- results %>%
+    arrange(p_value) %>%
+    slice_head(n = top_n) %>%
+    mutate(
+      taxon = factor(taxon, levels = rev(unique(taxon))),
+      comparison = paste(group_1, "vs", group_2)
+    ) %>%
+    select(
+      dataset,
+      outcome,
+      taxon,
+      group_1,
+      group_2,
+      prevalence_group_1,
+      prevalence_group_2
+    ) %>%
+    pivot_longer(
+      cols = c(prevalence_group_1, prevalence_group_2),
+      names_to = "group_type",
+      values_to = "prevalence"
+    ) %>%
+    mutate(
+      group = case_when(
+        group_type == "prevalence_group_1" ~ group_1,
+        group_type == "prevalence_group_2" ~ group_2
+      )
+    )
+  
+  p <- ggplot(
+    plot_df,
+    aes(
+      x = taxon,
+      y = prevalence,
+      fill = group
+    )
+  ) +
+    geom_col(position = position_dodge(width = 0.8)) +
+    coord_flip() +
+    scale_y_continuous(
+      labels = scales::percent_format(accuracy = 1),
+      limits = c(0, 1)
+    ) +
+    labs(
+      title = paste0("Top prevalence signals: ", unique(results$dataset), " / ", unique(results$outcome)),
+      x = "Taxon",
+      y = "Prevalence",
+      fill = "Group"
+    ) +
+    theme_bw() +
+    theme(
+      plot.title = element_text(face = "bold"),
+      axis.text.y = element_text(size = 8)
+    )
+  
+  ggsave(
+    filename = file.path(figures_dir, output_filename),
+    plot = p,
+    width = 9,
+    height = 6,
+    dpi = 300
+  )
+  
+  return(p)
+}
+
+plot_top_prevalence(
+  fungal_outcome_results,
+  "refseq_fungal_prevalence_TERM_vs_sPTB_top_signals.png"
+)
+
+plot_top_prevalence(
+  fungal_sptb34_results,
+  "refseq_fungal_prevalence_sPTB34_yes_no_top_signals.png"
+)
+
+plot_top_prevalence(
+  viral_outcome_results,
+  "refseq_viral_prevalence_TERM_vs_sPTB_top_signals.png"
+)
+
+plot_top_prevalence(
+  viral_sptb34_results,
+  "refseq_viral_prevalence_sPTB34_yes_no_top_signals.png"
+)
+
+
+############################
+# 12. Interpretation helper table
+############################
+
+interpretation_table <- all_prevalence_results %>%
+  mutate(
+    interpretation = case_when(
+      fdr_significant ~ "FDR-significant prevalence difference",
+      nominal_signal ~ "Nominal prevalence signal only; exploratory",
+      TRUE ~ "No prevalence signal"
+    )
+  ) %>%
+  select(
+    dataset,
+    outcome,
+    taxon,
+    group_1,
+    group_2,
+    prevalence_group_1,
+    prevalence_group_2,
+    prevalence_difference_group2_minus_group1,
+    enriched_group,
+    odds_ratio,
+    p_value,
+    q_value,
+    interpretation
+  ) %>%
+  arrange(dataset, outcome, q_value, p_value)
+
+write_csv(
+  interpretation_table,
+  file.path(results_dir, "refseq_prevalence_interpretation_table.csv")
+)
+
+
+############################
+# 13. Final message
+############################
+
+message("Complete: RefSeq fungal and viral prevalence testing finished.")
+message("Results saved to: ", results_dir)
+message("Figures saved to: ", figures_dir)
+```
+```{r}
+# ============================================================
+# Plot RefSeq prevalence-testing nominal candidate taxa
+# ============================================================
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(readr)
+  library(ggplot2)
+  library(stringr)
+})
+
+# ============================================================
+# Set paths
+# ============================================================
+
+results_dir <- "C:/Users/valfr/OneDrive/Documents/Masters/Research Project/Results/RefSeq_prevalence_testing"
+
+out_dir <- file.path(results_dir, "figures")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+# ============================================================
+# Read prevalence results
+# ============================================================
+
+df <- read_csv(
+  file.path(results_dir, "refseq_all_prevalence_results.csv"),
+  show_col_types = FALSE
+)
+
+# ============================================================
+# Keep nominal prevalence signals only
+# ============================================================
+
+plot_df <- df %>%
+  filter(p_value < 0.05) %>%
+  mutate(
+    domain = case_when(
+      str_detect(dataset, "fungi") ~ "Fungal",
+      str_detect(dataset, "viruses") ~ "Viral",
+      TRUE ~ "Other"
+    ),
+    
+    comparison_label = case_when(
+      outcome == "outcome" ~ "TERM vs sPTB",
+      outcome == "sPTB34" ~ "sPTB34 yes vs no",
+      TRUE ~ outcome
+    ),
+    
+    enriched_label = case_when(
+      enriched_group == "TERM" ~ "TERM",
+      enriched_group == "sPTB" ~ "sPTB",
+      enriched_group == "yes" ~ "sPTB <34",
+      enriched_group == "no" ~ "Not sPTB <34",
+      TRUE ~ enriched_group
+    ),
+    
+    effect = prevalence_difference_group2_minus_group1,
+    neg_log10_p = -log10(p_value),
+    taxon_label = taxon
+  ) %>%
+  arrange(domain, comparison_label, p_value) %>%
+  group_by(domain, comparison_label) %>%
+  mutate(
+    taxon_label = factor(
+      taxon_label,
+      levels = rev(unique(taxon_label))
+    )
+  ) %>%
+  ungroup()
+
+# ============================================================
+# Safety check
+# ============================================================
+
+if (nrow(plot_df) == 0) {
+  stop("No nominal prevalence signals with p < 0.05 to plot.")
+}
+
+message("Number of nominal prevalence signals plotted: ", nrow(plot_df))
+message("Number of unique taxa plotted: ", length(unique(plot_df$taxon)))
+
+# ============================================================
+# Plot
+# ============================================================
+
+p <- ggplot(
+  plot_df,
+  aes(
+    x = effect,
+    y = taxon_label,
+    size = neg_log10_p,
+    colour = enriched_label
+  )
+) +
+  geom_vline(
+    xintercept = 0,
+    linetype = "dashed",
+    linewidth = 0.4
+  ) +
+  geom_point(alpha = 0.9) +
+  facet_grid(
+    domain ~ comparison_label,
+    scales = "free_y",
+    space = "free_y"
+  ) +
+ scale_colour_manual(
+  values = c(
+    "TERM" = "#1f77b4",
+    "sPTB" = "#CC79A7",
+    "sPTB <34" = "#E69F00",
+    "Not sPTB <34" = "#009E73"
+    )
+) +
+  labs(
+    title = "Prevalence-testing nominal signals",
+    x = "Prevalence difference between groups",
+    y = NULL,
+    size = "-log10(p-value)",
+    colour = "Higher prevalence in"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    strip.background = element_rect(
+      fill = "white",
+      colour = "black"
+    ),
+    strip.text = element_text(face = "bold"),
+    axis.text.y = element_text(size = 8),
+    panel.grid.minor = element_blank(),
+    legend.position = "right"
+  )
+
+# ============================================================
+# Save outputs
+# ============================================================
+
+ggsave(
+  filename = file.path(
+    out_dir,
+    "refseq_prevalence_nominal_signals_overview_corrected_colours.png"
+  ),
+  plot = p,
+  width = 11,
+  height = 9,
+  dpi = 300
+)
+
+ggsave(
+  filename = file.path(
+    out_dir,
+    "refseq_prevalence_nominal_signals_overview_corrected_colours.pdf"
+  ),
+  plot = p,
+  width = 11,
+  height = 9
+)
+
+message("Figure saved to: ", out_dir)
+```
+

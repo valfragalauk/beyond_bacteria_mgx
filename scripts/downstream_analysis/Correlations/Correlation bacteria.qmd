@@ -1,0 +1,687 @@
+---
+title: "Bacterial correlation"
+format: html
+---
+
+
+```{r}
+# ============================================================
+# Bacterial context analysis for shortlisted fungal and viral taxa
+# ============================================================
+
+# This analysis evaluates whether PTB-associated fungal and viral taxa occur
+# preferentially within specific bacterial community structures, including CST,
+# clustered CST, dominant bacterial species, and bacterial species abundance profiles.
+
+# ----------------------------
+# Load required packages
+# ----------------------------
+
+library(tidyverse)
+library(ggplot2)
+library(pheatmap)
+
+# ----------------------------
+# Define project paths
+# ----------------------------
+
+project_root <- "C:/Users/valfr/OneDrive/Documents/Masters/Research Project"
+
+data_dir    <- file.path(project_root, "Data")
+results_dir <- file.path(project_root, "Results")
+figures_dir <- file.path(project_root, "Figures")
+
+metadata_file_tsv <- file.path(data_dir, "metadata_clean.tsv")
+
+fungal_file <- file.path(
+  data_dir,
+  "refseq_fungal_genus_2pct.totalcount_gt_1.prevalence_0p02.tsv"
+)
+
+viral_file <- file.path(
+  data_dir,
+  "refseq_viral_genus_2pct.totalcount_gt_1.prevalence_0p02.tsv"
+)
+
+bacterial_results_dir <- file.path(results_dir, "bacterial_context")
+bacterial_figures_dir <- file.path(figures_dir, "bacterial_context")
+
+dir.create(bacterial_results_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(bacterial_figures_dir, recursive = TRUE, showWarnings = FALSE)
+
+# ----------------------------
+# Define candidate taxa carried forward from previous analyses
+# ----------------------------
+
+fungal_candidates <- c(
+  "Aspergillus",
+  "Fusarium",
+  "Cryptococcus",
+  "Puccinia",
+  "Saccharomyces",
+  "Trichoderma"
+)
+
+viral_candidates <- c(
+  "Shenzhenivirus",
+  "Fohxhuevirus"
+)
+
+# ----------------------------
+# Read metadata using the required format
+# ----------------------------
+
+meta <- read.delim(
+  metadata_file_tsv,
+  sep = "\t",
+  check.names = FALSE
+)
+
+# The first metadata column contains short plotting labels such as ID_1, ID_2.
+# These labels are useful for figures but must not be used for sample matching.
+colnames(meta)[1] <- "sample_label"
+
+# Ensure BMI is numeric for consistency with previous models.
+meta$bmi <- as.numeric(meta$bmi)
+
+# ----------------------------
+# Define bacterial context columns from metadata
+# ----------------------------
+
+cst_column <- "CST"
+cluster_cst_column <- "Cluster_CST"
+dominant_species_column <- "Top_Specie"
+
+required_bacterial_context_columns <- c(
+  cst_column,
+  cluster_cst_column,
+  dominant_species_column
+)
+
+missing_context_columns <- setdiff(
+  required_bacterial_context_columns,
+  colnames(meta)
+)
+
+if (length(missing_context_columns) > 0) {
+  stop(
+    "Missing bacterial context columns in metadata: ",
+    paste(missing_context_columns, collapse = ", ")
+  )
+}
+
+# Bacterial species abundance/count columns are already present in the metadata.
+# They start at Acidaminococcus_intestini and end at Veillonella_sp.
+bacterial_start_col <- "Acidaminococcus_intestini"
+bacterial_end_col   <- "Veillonella_sp."
+
+if (!bacterial_start_col %in% colnames(meta)) {
+  stop("Bacterial start column not found: ", bacterial_start_col)
+}
+
+if (!bacterial_end_col %in% colnames(meta)) {
+  stop("Bacterial end column not found: ", bacterial_end_col)
+}
+
+bacterial_species_columns <- colnames(meta)[
+  which(colnames(meta) == bacterial_start_col):
+    which(colnames(meta) == bacterial_end_col)
+]
+
+bacterial_species_mat <- meta[, bacterial_species_columns]
+
+bacterial_species_mat <- bacterial_species_mat %>%
+  mutate(across(everything(), as.numeric))
+
+rownames(bacterial_species_mat) <- meta$reads_ID
+
+# ----------------------------
+# Read fungal and viral abundance matrices
+# ----------------------------
+
+fungal_mat <- read.delim(
+  fungal_file,
+  row.names = 1,
+  check.names = FALSE
+)
+
+viral_mat <- read.delim(
+  viral_file,
+  row.names = 1,
+  check.names = FALSE
+)
+
+# Remove trailing _1 from sequencing IDs before metadata matching.
+fungal_ids_clean <- sub("_1$", "", rownames(fungal_mat))
+viral_ids_clean  <- sub("_1$", "", rownames(viral_mat))
+
+# ----------------------------
+# Align fungal matrix with metadata
+# ----------------------------
+
+fungal_unmatched <- setdiff(fungal_ids_clean, meta$reads_ID)
+
+if (length(fungal_unmatched) > 0) {
+  stop(
+    "Unmatched fungal samples found: ",
+    paste(fungal_unmatched, collapse = ", ")
+  )
+}
+
+meta_fungal <- meta[
+  match(fungal_ids_clean, meta$reads_ID),
+]
+
+if (!all(meta_fungal$reads_ID == fungal_ids_clean)) {
+  stop("Fungal metadata order mismatch.")
+}
+
+rownames(fungal_mat) <- fungal_ids_clean
+rownames(meta_fungal) <- meta_fungal$reads_ID
+
+# ----------------------------
+# Align viral matrix with metadata
+# ----------------------------
+
+viral_unmatched <- setdiff(viral_ids_clean, meta$reads_ID)
+
+if (length(viral_unmatched) > 0) {
+  stop(
+    "Unmatched viral samples found: ",
+    paste(viral_unmatched, collapse = ", ")
+  )
+}
+
+meta_viral <- meta[
+  match(viral_ids_clean, meta$reads_ID),
+]
+
+if (!all(meta_viral$reads_ID == viral_ids_clean)) {
+  stop("Viral metadata order mismatch.")
+}
+
+rownames(viral_mat) <- viral_ids_clean
+rownames(meta_viral) <- meta_viral$reads_ID
+
+# ----------------------------
+# Keep only candidate taxa present in each matrix
+# ----------------------------
+
+fungal_candidates_present <- intersect(fungal_candidates, colnames(fungal_mat))
+viral_candidates_present  <- intersect(viral_candidates, colnames(viral_mat))
+
+missing_fungal_candidates <- setdiff(fungal_candidates, colnames(fungal_mat))
+missing_viral_candidates  <- setdiff(viral_candidates, colnames(viral_mat))
+
+write.csv(
+  data.frame(missing_fungal_candidates = missing_fungal_candidates),
+  file.path(bacterial_results_dir, "missing_fungal_candidates.csv"),
+  row.names = FALSE
+)
+
+write.csv(
+  data.frame(missing_viral_candidates = missing_viral_candidates),
+  file.path(bacterial_results_dir, "missing_viral_candidates.csv"),
+  row.names = FALSE
+)
+
+# ----------------------------
+# Helper function for group-based non-parametric testing
+# ----------------------------
+run_group_tests <- function(mat, meta_aligned, taxa, group_column, domain_name) {
+  
+  summary_results_list <- list()
+  pairwise_results_list <- list()
+  
+  for (candidate_taxon in taxa) {
+    
+    df <- data.frame(
+      reads_ID = rownames(mat),
+      sample_label = meta_aligned$sample_label,
+      outcome = meta_aligned$outcome,
+      group = as.character(meta_aligned[[group_column]]),
+      candidate_taxon = candidate_taxon,
+      abundance = as.numeric(mat[, candidate_taxon]),
+      presence = ifelse(as.numeric(mat[, candidate_taxon]) > 0, 1, 0)
+    )
+    
+    df <- df %>%
+      filter(!is.na(group))
+    
+    if (length(unique(df$group)) < 2) {
+      next
+    }
+    
+    kruskal_result <- kruskal.test(abundance ~ group, data = df)
+    
+    prevalence_table <- table(df$presence, df$group)
+    
+    fisher_result <- tryCatch(
+      fisher.test(prevalence_table),
+      error = function(e) NULL
+    )
+    
+    group_summary <- df %>%
+      group_by(group) %>%
+      summarise(
+        domain = first(domain_name),
+        taxon = first(candidate_taxon),
+        n_samples = n(),
+        n_detected = sum(presence == 1, na.rm = TRUE),
+        prevalence = n_detected / n_samples,
+        median_abundance = median(abundance, na.rm = TRUE),
+        mean_abundance = mean(abundance, na.rm = TRUE),
+        IQR_abundance = IQR(abundance, na.rm = TRUE),
+        .groups = "drop"
+      ) %>%
+      mutate(
+        grouping_variable = group_column,
+        kruskal_p = kruskal_result$p.value,
+        fisher_prevalence_p = ifelse(
+          is.null(fisher_result),
+          NA_real_,
+          fisher_result$p.value
+        )
+      )
+    
+    summary_results_list[[candidate_taxon]] <- group_summary
+    
+    pairwise_test <- pairwise.wilcox.test(
+      x = df$abundance,
+      g = df$group,
+      p.adjust.method = "BH",
+      exact = FALSE
+    )
+    
+    pairwise_df <- as.data.frame(as.table(pairwise_test$p.value)) %>%
+      rename(
+        group_1 = Var1,
+        group_2 = Var2,
+        pairwise_wilcox_p_adj = Freq
+      ) %>%
+      mutate(
+        domain = domain_name,
+        taxon = candidate_taxon,
+        grouping_variable = group_column
+      ) %>%
+      filter(!is.na(pairwise_wilcox_p_adj))
+    
+    pairwise_results_list[[candidate_taxon]] <- pairwise_df
+  }
+  
+  summary_results <- bind_rows(summary_results_list)
+  pairwise_results <- bind_rows(pairwise_results_list)
+  
+  if (nrow(summary_results) > 0) {
+    summary_results <- summary_results %>%
+      group_by(domain, grouping_variable) %>%
+      mutate(
+        kruskal_q = p.adjust(kruskal_p, method = "BH"),
+        fisher_prevalence_q = p.adjust(fisher_prevalence_p, method = "BH")
+      ) %>%
+      ungroup()
+  }
+  
+  return(
+    list(
+      summary = summary_results,
+      pairwise = pairwise_results
+    )
+  )
+}
+
+# ----------------------------
+# Test candidate taxa across CST groups
+# ----------------------------
+
+fungal_cst_results <- run_group_tests(
+  mat = fungal_mat,
+  meta_aligned = meta_fungal,
+  taxa = fungal_candidates_present,
+  group_column = cst_column,
+  domain_name = "Fungal"
+)
+
+viral_cst_results <- run_group_tests(
+  mat = viral_mat,
+  meta_aligned = meta_viral,
+  taxa = viral_candidates_present,
+  group_column = cst_column,
+  domain_name = "Viral"
+)
+
+# ----------------------------
+# Test candidate taxa across clustered CST groups
+# ----------------------------
+
+fungal_cluster_cst_results <- run_group_tests(
+  mat = fungal_mat,
+  meta_aligned = meta_fungal,
+  taxa = fungal_candidates_present,
+  group_column = cluster_cst_column,
+  domain_name = "Fungal"
+)
+
+viral_cluster_cst_results <- run_group_tests(
+  mat = viral_mat,
+  meta_aligned = meta_viral,
+  taxa = viral_candidates_present,
+  group_column = cluster_cst_column,
+  domain_name = "Viral"
+)
+
+# ----------------------------
+# Test candidate taxa across dominant bacterial species groups
+# ----------------------------
+
+fungal_top_species_results <- run_group_tests(
+  mat = fungal_mat,
+  meta_aligned = meta_fungal,
+  taxa = fungal_candidates_present,
+  group_column = dominant_species_column,
+  domain_name = "Fungal"
+)
+
+viral_top_species_results <- run_group_tests(
+  mat = viral_mat,
+  meta_aligned = meta_viral,
+  taxa = viral_candidates_present,
+  group_column = dominant_species_column,
+  domain_name = "Viral"
+)
+
+# ----------------------------
+# Combine and save group-based results
+# ----------------------------
+
+group_summary_results <- bind_rows(
+  fungal_cst_results$summary,
+  viral_cst_results$summary,
+  fungal_cluster_cst_results$summary,
+  viral_cluster_cst_results$summary,
+  fungal_top_species_results$summary,
+  viral_top_species_results$summary
+)
+
+group_pairwise_results <- bind_rows(
+  fungal_cst_results$pairwise,
+  viral_cst_results$pairwise,
+  fungal_cluster_cst_results$pairwise,
+  viral_cluster_cst_results$pairwise,
+  fungal_top_species_results$pairwise,
+  viral_top_species_results$pairwise
+)
+
+write.csv(
+  group_summary_results,
+  file.path(bacterial_results_dir, "candidate_taxa_bacterial_context_group_tests.csv"),
+  row.names = FALSE
+)
+
+write.csv(
+  group_pairwise_results,
+  file.path(bacterial_results_dir, "candidate_taxa_bacterial_context_pairwise_wilcoxon.csv"),
+  row.names = FALSE
+)
+
+# ----------------------------
+# Create plotting dataframe
+# ----------------------------
+
+fungal_plot_df <- fungal_mat[, fungal_candidates_present, drop = FALSE] %>%
+  as.data.frame() %>%
+  mutate(
+    reads_ID = rownames(fungal_mat),
+    sample_label = meta_fungal$sample_label,
+    outcome = meta_fungal$outcome,
+    CST = meta_fungal[[cst_column]],
+    Cluster_CST = meta_fungal[[cluster_cst_column]],
+    Top_Specie = meta_fungal[[dominant_species_column]]
+  ) %>%
+  pivot_longer(
+    cols = all_of(fungal_candidates_present),
+    names_to = "taxon",
+    values_to = "abundance"
+  ) %>%
+  mutate(domain = "Fungal")
+
+viral_plot_df <- viral_mat[, viral_candidates_present, drop = FALSE] %>%
+  as.data.frame() %>%
+  mutate(
+    reads_ID = rownames(viral_mat),
+    sample_label = meta_viral$sample_label,
+    outcome = meta_viral$outcome,
+    CST = meta_viral[[cst_column]],
+    Cluster_CST = meta_viral[[cluster_cst_column]],
+    Top_Specie = meta_viral[[dominant_species_column]]
+  ) %>%
+  pivot_longer(
+    cols = all_of(viral_candidates_present),
+    names_to = "taxon",
+    values_to = "abundance"
+  ) %>%
+  mutate(domain = "Viral")
+
+candidate_plot_df <- bind_rows(fungal_plot_df, viral_plot_df)
+
+write.csv(
+  candidate_plot_df,
+  file.path(bacterial_results_dir, "candidate_taxa_bacterial_context_plotting_data.csv"),
+  row.names = FALSE
+)
+
+# ----------------------------
+# Plot candidate taxa by CST
+# ----------------------------
+
+plot_by_cst <- ggplot(
+  candidate_plot_df %>% filter(!is.na(CST)),
+  aes(x = factor(CST), y = abundance)
+) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(width = 0.15, alpha = 0.7, size = 1.6) +
+  facet_grid(domain ~ taxon, scales = "free_y") +
+  labs(
+    x = "Bacterial community state type",
+    y = "Relative abundance",
+    title = "Candidate fungal and viral taxa across CST groups"
+  ) +
+  theme_bw() +
+  theme(
+    strip.text = element_text(face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(face = "bold")
+  )
+
+ggsave(
+  file.path(bacterial_figures_dir, "candidate_taxa_by_CST_boxplots.png"),
+  plot_by_cst,
+  width = 12,
+  height = 7,
+  dpi = 300
+)
+
+ggsave(
+  file.path(bacterial_figures_dir, "candidate_taxa_by_CST_boxplots.pdf"),
+  plot_by_cst,
+  width = 12,
+  height = 7
+)
+
+# ----------------------------
+# Plot candidate taxa by dominant bacterial species
+# ----------------------------
+
+top_species_to_keep <- candidate_plot_df %>%
+  count(Top_Specie, sort = TRUE) %>%
+  filter(!is.na(Top_Specie)) %>%
+  slice_head(n = 10) %>%
+  pull(Top_Specie)
+
+plot_by_top_species <- ggplot(
+  candidate_plot_df %>%
+    filter(Top_Specie %in% top_species_to_keep),
+  aes(x = Top_Specie, y = abundance)
+) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(width = 0.15, alpha = 0.7, size = 1.6) +
+  facet_grid(domain ~ taxon, scales = "free_y") +
+  labs(
+    x = "Dominant bacterial species",
+    y = "Relative abundance",
+    title = "Candidate fungal and viral taxa across dominant bacterial species"
+  ) +
+  theme_bw() +
+  theme(
+    strip.text = element_text(face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(face = "bold")
+  )
+
+ggsave(
+  file.path(bacterial_figures_dir, "candidate_taxa_by_Top_Specie_boxplots.png"),
+  plot_by_top_species,
+  width = 14,
+  height = 7,
+  dpi = 300
+)
+
+ggsave(
+  file.path(bacterial_figures_dir, "candidate_taxa_by_Top_Specie_boxplots.pdf"),
+  plot_by_top_species,
+  width = 14,
+  height = 7
+)
+
+
+cst_heatmap_df <- group_summary_results %>%
+  filter(grouping_variable == cst_column) %>%
+  mutate(
+    taxon_label = paste(domain, taxon, sep = ": "),
+    group = as.character(group),
+    median_abundance = as.numeric(median_abundance)
+  ) %>%
+  group_by(taxon_label, group) %>%
+  summarise(
+    median_abundance = median(median_abundance, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(
+    names_from = group,
+    values_from = median_abundance,
+    values_fill = list(median_abundance = 0)
+  ) %>%
+  as.data.frame()
+
+rownames(cst_heatmap_df) <- cst_heatmap_df$taxon_label
+cst_heatmap_df$taxon_label <- NULL
+
+# Force all columns to numeric
+cst_heatmap_df[] <- lapply(cst_heatmap_df, as.numeric)
+
+cst_heatmap_matrix <- as.matrix(cst_heatmap_df)
+
+# Replace any missing values with zero
+cst_heatmap_matrix[is.na(cst_heatmap_matrix)] <- 0
+
+# Remove taxa with no variation across CST groups
+# These create NaN values when rows are scaled
+row_sds <- apply(
+  cst_heatmap_matrix,
+  1,
+  sd,
+  na.rm = TRUE
+)
+
+cst_heatmap_matrix_filtered <- cst_heatmap_matrix[
+  row_sds > 0 & is.finite(row_sds),
+  ,
+  drop = FALSE
+]
+
+# Save PNG heatmap
+png(
+  file.path(
+    bacterial_figures_dir,
+    "candidate_taxa_median_abundance_by_CST_heatmap.png"
+  ),
+  width = 2200,
+  height = 1400,
+  res = 300
+)
+
+pheatmap::pheatmap(
+  cst_heatmap_matrix_filtered,
+  scale = "row",
+  clustering_distance_rows = "euclidean",
+  clustering_distance_cols = "euclidean",
+  clustering_method = "complete",
+  main = "Median candidate taxon abundance by CST"
+)
+
+dev.off()
+
+# Save PDF heatmap
+pdf(
+  file.path(
+    bacterial_figures_dir,
+    "candidate_taxa_median_abundance_by_CST_heatmap.pdf"
+  ),
+  width = 9,
+  height = 6
+)
+
+pheatmap::pheatmap(
+  cst_heatmap_matrix_filtered,
+  scale = "row",
+  clustering_distance_rows = "euclidean",
+  clustering_distance_cols = "euclidean",
+  clustering_method = "complete",
+  main = "Median candidate taxon abundance by CST"
+)
+
+dev.off()
+
+# Save list of taxa removed from clustering
+removed_taxa <- names(row_sds)[
+  row_sds == 0 | !is.finite(row_sds)
+]
+
+write.csv(
+  data.frame(taxon_removed = removed_taxa),
+  file.path(
+    bacterial_results_dir,
+    "heatmap_removed_zero_variance_taxa.csv"
+  ),
+  row.names = FALSE
+)
+
+# ----------------------------
+# Save session information for reproducibility
+# ----------------------------
+
+sink(file.path(bacterial_results_dir, "session_info_bacterial_context.txt"))
+sessionInfo()
+sink()
+```
+```{r}
+group_summary_results %>%
+  filter(grouping_variable == "CST") %>%
+  count(domain, taxon, group) %>%
+  arrange(desc(n))
+
+```
+
+```{r}
+group_summary_results %>%
+  filter(grouping_variable == "CST") %>%
+  distinct(domain, taxon, group) %>%
+  nrow()
+```
+```{r}
+nrow(
+  group_summary_results %>%
+    filter(grouping_variable == "CST")
+)
+```
+

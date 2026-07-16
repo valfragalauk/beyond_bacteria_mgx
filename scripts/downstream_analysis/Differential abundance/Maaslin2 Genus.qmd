@@ -1,0 +1,258 @@
+---
+title: "Maaslin2 BMI adjusted"
+format: html
+---
+
+```{r}
+# ============================================================
+#MaAsLin2 RefSeq genus-level association models
+# ============================================================
+
+suppressPackageStartupMessages({
+  library(Maaslin2)
+  library(dplyr)
+  library(readr)
+  library(tibble)
+})
+
+# -----------------------------
+# Paths
+# -----------------------------
+
+data_dir <- "C:/Users/valfr/OneDrive/Documents/Masters/Research Project/Data"
+
+metadata_file_tsv <- file.path(data_dir, "metadata_clean.tsv")
+
+fungal_file <- file.path(
+  data_dir,
+  "refseq_fungal_genus_2pct.totalcount_gt_1.prevalence_0p02.tsv"
+)
+
+viral_file <- file.path(
+  data_dir,
+  "refseq_viral_genus_2pct.totalcount_gt_1.prevalence_0p02.tsv"
+)
+
+out_root <- file.path(data_dir, "maaslin2_refseq_results_adjusted")
+dir.create(out_root, recursive = TRUE, showWarnings = FALSE)
+
+# -----------------------------
+# Load matrix and match metadata
+# -----------------------------
+
+load_and_match <- function(matrix_file, metadata_file_tsv) {
+  
+  # Matrix format: rows = samples, columns = taxa
+  mat <- read.delim(
+    matrix_file,
+    sep = "\t",
+    header = TRUE,
+    row.names = 1,
+    check.names = FALSE
+  )
+  
+  # Remove trailing _1 from matrix sample IDs
+  matrix_ids_clean <- sub("_1$", "", rownames(mat))
+  rownames(mat) <- matrix_ids_clean
+  
+  # Read metadata safely
+  meta <- read.delim(
+    metadata_file_tsv,
+    sep = "\t",
+    header = TRUE,
+    check.names = FALSE
+  )
+  
+  # First column contains ID_1, ID_2, etc.
+  colnames(meta)[1] <- "sample_label"
+  
+  # Check unmatched samples
+  unmatched <- setdiff(matrix_ids_clean, meta$reads_ID)
+  if (length(unmatched) > 0) {
+    stop("Unmatched samples found: ", paste(unmatched, collapse = ", "))
+  }
+  
+  # Match metadata to matrix order using reads_ID
+  meta <- meta[match(matrix_ids_clean, meta$reads_ID), ]
+  
+  # Confirm metadata order
+  if (!all(meta$reads_ID == matrix_ids_clean)) {
+    stop("Metadata order mismatch")
+  }
+  
+  rownames(meta) <- meta$reads_ID
+  
+  return(list(mat = mat, meta = meta))
+}
+
+# -----------------------------
+# Prepare metadata
+# -----------------------------
+
+prepare_metadata <- function(meta) {
+  
+  meta$outcome <- factor(meta$outcome, levels = c("TERM", "sPTB"))
+  meta$sPTB34 <- factor(meta$sPTB34, levels = c("no", "yes"))
+  
+  # Important: metadata column is lowercase bmi
+  meta$bmi <- as.numeric(meta$bmi)
+  
+  return(meta)
+}
+
+# -----------------------------
+# Run MaAsLin2 model
+# -----------------------------
+
+run_maaslin_model <- function(mat, meta, dataset_name, outcome_var, adjust_bmi = FALSE) {
+  
+  fixed_effects <- outcome_var
+  
+  if (adjust_bmi) {
+    fixed_effects <- c(outcome_var, "bmi")
+  }
+  
+  # Keep only samples complete for variables in this model
+  keep <- complete.cases(meta[, fixed_effects, drop = FALSE])
+  
+  mat_model <- as.data.frame(mat[keep, , drop = FALSE])
+  meta_model <- as.data.frame(meta[keep, fixed_effects, drop = FALSE])
+  
+  # Explicit rownames required by MaAsLin2
+  sample_ids <- rownames(mat)[keep]
+  rownames(mat_model) <- sample_ids
+  rownames(meta_model) <- sample_ids
+  
+  # Safety checks
+  if (any(is.na(rownames(mat_model))) || any(rownames(mat_model) == "")) {
+    stop("Missing matrix sample IDs")
+  }
+  
+  if (any(duplicated(rownames(mat_model)))) {
+    stop("Duplicate matrix sample IDs")
+  }
+  
+  if (!all(rownames(mat_model) == rownames(meta_model))) {
+    stop("Matrix and metadata sample IDs do not match before MaAsLin2")
+  }
+  
+  model_name <- paste0(
+    dataset_name, "_",
+    outcome_var, "_",
+    ifelse(adjust_bmi, "BMI_adjusted", "unadjusted")
+  )
+  
+  out_dir <- file.path(out_root, model_name)
+  dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+  
+  message("Running: ", model_name)
+  message("Samples: ", nrow(mat_model))
+  message("Taxa: ", ncol(mat_model))
+  message("Sample IDs match: ", all(rownames(mat_model) == rownames(meta_model)))
+  
+  Maaslin2(
+    input_data = mat_model,
+    input_metadata = meta_model,
+    output = out_dir,
+    fixed_effects = fixed_effects,
+    normalization = "TSS",
+    transform = "LOG",
+    analysis_method = "LM",
+    correction = "BH",
+    max_significance = 0.05,
+    standardize = FALSE,
+    plot_heatmap = FALSE,
+    plot_scatter = FALSE
+  )
+  
+  message("Finished: ", model_name)
+}
+
+# -----------------------------
+# Load and prepare datasets
+# -----------------------------
+
+fungi <- load_and_match(fungal_file, metadata_file_tsv)
+viruses <- load_and_match(viral_file, metadata_file_tsv)
+
+fungi$meta <- prepare_metadata(fungi$meta)
+viruses$meta <- prepare_metadata(viruses$meta)
+
+# -----------------------------
+# RefSeq fungi: priority models
+# -----------------------------
+
+run_maaslin_model(fungi$mat, fungi$meta, "refseq_fungal_genus", "outcome", FALSE)
+run_maaslin_model(fungi$mat, fungi$meta, "refseq_fungal_genus", "outcome", TRUE)
+
+run_maaslin_model(fungi$mat, fungi$meta, "refseq_fungal_genus", "sPTB34", FALSE)
+run_maaslin_model(fungi$mat, fungi$meta, "refseq_fungal_genus", "sPTB34", TRUE)
+
+# -----------------------------
+# RefSeq viruses: secondary models
+# -----------------------------
+
+run_maaslin_model(viruses$mat, viruses$meta, "refseq_viral_genus", "outcome", FALSE)
+run_maaslin_model(viruses$mat, viruses$meta, "refseq_viral_genus", "outcome", TRUE)
+
+run_maaslin_model(viruses$mat, viruses$meta, "refseq_viral_genus", "sPTB34", FALSE)
+run_maaslin_model(viruses$mat, viruses$meta, "refseq_viral_genus", "sPTB34", TRUE)
+
+message("All Step 14A MaAsLin2 models completed.")
+```
+```{r}
+# ============================================================
+# Combine all nominally significant MaAsLin2 results
+# (raw p < 0.05)
+# ============================================================
+
+library(dplyr)
+library(readr)
+
+maaslin_files <- list.files(
+  out_root,
+  pattern = "all_results.tsv",
+  recursive = TRUE,
+  full.names = TRUE
+)
+
+all_results <- lapply(maaslin_files, function(file) {
+  
+  model_name <- basename(dirname(file))
+  
+  read_tsv(
+    file,
+    show_col_types = FALSE
+  ) %>%
+    mutate(model = model_name)
+  
+}) %>%
+  bind_rows()
+
+# Keep only nominally significant results
+nominal_hits <- all_results %>%
+  filter(pval < 0.05) %>%
+  arrange(pval) %>%
+  mutate(
+    significance = case_when(
+      qval < 0.05 ~ "FDR significant",
+      TRUE ~ "Nominal only"
+    )
+  )
+
+# Save CSV
+write_csv(
+  nominal_hits,
+  file.path(
+    out_root,
+    "all_nominal_p005_results.csv"
+  )
+)
+
+message(
+  "Saved ",
+  nrow(nominal_hits),
+  " nominally significant results."
+)
+```
+

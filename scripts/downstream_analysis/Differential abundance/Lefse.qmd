@@ -1,0 +1,430 @@
+---
+title: "Lefse"
+format: html
+---
+
+```{r}
+
+suppressPackageStartupMessages({
+  library(phyloseq)
+  library(microbiomeMarker)
+  library(dplyr)
+  library(ggplot2)
+  library(readr)
+  library(tibble)
+})
+
+############################################################
+# 1. Paths
+############################################################
+
+project_root <- "C:/Users/valfr/OneDrive/Documents/Masters/Research Project"
+
+data_dir <- file.path(project_root, "Data")
+results_dir <- file.path(project_root, "Results")
+figures_dir <- file.path(project_root, "Figures")
+
+metadata_file_tsv <- file.path(data_dir, "metadata_clean.tsv")
+
+fungal_file <- file.path(
+  data_dir,
+  "refseq_fungal_genus_2pct.totalcount_gt_1.prevalence_0p02.tsv"
+)
+
+viral_file <- file.path(
+  data_dir,
+  "refseq_viral_genus_2pct.totalcount_gt_1.prevalence_0p02.tsv"
+)
+
+lefse_results_dir <- file.path(results_dir, "LEfSe")
+lefse_figures_dir <- file.path(figures_dir, "LEfSe")
+
+dir.create(lefse_results_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(lefse_figures_dir, recursive = TRUE, showWarnings = FALSE)
+
+############################################################
+# 2. Read metadata
+############################################################
+
+meta <- read.delim(
+  metadata_file_tsv,
+  sep = "\t",
+  check.names = FALSE
+)
+
+colnames(meta)[1] <- "sample_label"
+
+required_meta_cols <- c("sample_label", "reads_ID", "outcome", "sPTB34", "bmi")
+
+missing_meta_cols <- setdiff(required_meta_cols, colnames(meta))
+
+if (length(missing_meta_cols) > 0) {
+  stop("Missing metadata columns: ", paste(missing_meta_cols, collapse = ", "))
+}
+
+meta$bmi <- as.numeric(meta$bmi)
+
+############################################################
+# 3. Functions
+############################################################
+
+read_and_align_matrix <- function(matrix_file, meta) {
+  
+  mat <- read.delim(
+    matrix_file,
+    row.names = 1,
+    check.names = FALSE
+  )
+  
+  matrix_ids_clean <- sub("_1$", "", rownames(mat))
+  
+  unmatched <- setdiff(matrix_ids_clean, meta$reads_ID)
+  
+  if (length(unmatched) > 0) {
+    stop("Unmatched samples found: ", paste(unmatched, collapse = ", "))
+  }
+  
+  meta_aligned <- meta[
+    match(matrix_ids_clean, meta$reads_ID),
+  ]
+  
+  if (!all(meta_aligned$reads_ID == matrix_ids_clean)) {
+    stop("Metadata order mismatch")
+  }
+  
+  rownames(mat) <- matrix_ids_clean
+  rownames(meta_aligned) <- meta_aligned$reads_ID
+  
+  mat <- as.data.frame(mat)
+  mat[] <- lapply(mat, function(x) as.numeric(as.character(x)))
+  mat[is.na(mat)] <- 0
+  
+  list(
+    mat = mat,
+    meta = meta_aligned
+  )
+}
+
+make_relative_abundance <- function(mat) {
+  
+  row_totals <- rowSums(mat)
+  keep_samples <- row_totals > 0
+  
+  mat <- mat[keep_samples, , drop = FALSE]
+  row_totals <- row_totals[keep_samples]
+  
+  mat_rel <- sweep(mat, 1, row_totals, "/")
+  mat_rel <- mat_rel[, colSums(mat_rel) > 0, drop = FALSE]
+  
+  return(mat_rel)
+}
+
+make_phyloseq_for_lefse <- function(mat_rel, meta_model) {
+  
+  otu <- otu_table(
+    as.matrix(t(mat_rel)),
+    taxa_are_rows = TRUE
+  )
+  
+  tax <- tax_table(
+    as.matrix(
+      data.frame(
+        Genus = colnames(mat_rel),
+        row.names = colnames(mat_rel),
+        check.names = FALSE
+      )
+    )
+  )
+  
+  samp <- sample_data(meta_model)
+  
+  phyloseq(otu, tax, samp)
+}
+
+extract_lefse_table <- function(lefse_result) {
+  
+  marker_df <- as.data.frame(marker_table(lefse_result))
+  
+  if (nrow(marker_df) == 0) {
+    return(data.frame())
+  }
+  
+  marker_df <- marker_df %>%
+    rownames_to_column("marker_id")
+  
+  return(marker_df)
+}
+
+plot_lefse_lda <- function(marker_df, dataset_name, comparison_name) {
+  
+  if (nrow(marker_df) == 0) {
+    return(NULL)
+  }
+  
+  lda_col <- intersect(c("lda", "ef_lda", "lda_score"), colnames(marker_df))[1]
+  group_col <- intersect(c("enrich_group", "group", "class"), colnames(marker_df))[1]
+  feature_col <- intersect(c("feature", "taxon", "marker", "marker_id"), colnames(marker_df))[1]
+  
+  if (is.na(lda_col) || is.na(group_col) || is.na(feature_col)) {
+    warning("Could not identify LEfSe plotting columns.")
+    return(NULL)
+  }
+  
+  plot_df <- marker_df %>%
+    mutate(
+      lda_score = as.numeric(.data[[lda_col]]),
+      group = as.factor(.data[[group_col]]),
+      feature = as.character(.data[[feature_col]])
+    ) %>%
+    arrange(lda_score) %>%
+    mutate(feature = factor(feature, levels = unique(feature)))
+  
+  ggplot(plot_df, aes(x = lda_score, y = feature, fill = group)) +
+    geom_col(width = 0.75) +
+    theme_bw(base_size = 12) +
+    labs(
+      title = paste0("LEfSe discriminant taxa: ", dataset_name),
+      subtitle = comparison_name,
+      x = "LDA score",
+      y = NULL,
+      fill = "Enriched group"
+    ) +
+    theme(
+      plot.title = element_text(face = "bold"),
+      axis.text.y = element_text(size = 9),
+      legend.position = "right"
+    )
+}
+
+run_lefse_analysis <- function(
+    matrix_file,
+    dataset_name,
+    comparison_name,
+    group_column,
+    group_levels,
+    lda_cutoff = 1.0
+) {
+  
+  message("Running LEfSe: ", dataset_name, " | ", comparison_name)
+  
+  aligned <- read_and_align_matrix(matrix_file, meta)
+  
+  mat <- aligned$mat
+  meta_aligned <- aligned$meta
+  
+  keep <- !is.na(meta_aligned[[group_column]]) &
+    meta_aligned[[group_column]] %in% group_levels
+  
+  mat <- mat[keep, , drop = FALSE]
+  meta_model <- meta_aligned[keep, , drop = FALSE]
+  
+  meta_model$lefse_group <- factor(
+    meta_model[[group_column]],
+    levels = group_levels
+  )
+  
+  mat_rel <- make_relative_abundance(mat)
+  meta_model <- meta_model[rownames(mat_rel), , drop = FALSE]
+  
+  if (!all(rownames(mat_rel) == meta_model$reads_ID)) {
+    stop("Post-filtering metadata order mismatch")
+  }
+  
+  group_counts <- table(meta_model$lefse_group)
+  
+  if (sum(group_counts > 0) < 2) {
+    stop("LEfSe requires at least two non-empty groups.")
+  }
+  
+  ps <- make_phyloseq_for_lefse(mat_rel, meta_model)
+  
+  lefse_result <- run_lefse(
+    ps,
+    group = "lefse_group",
+    norm = "none",
+    kw_cutoff = 0.05,
+    wilcoxon_cutoff = 0.05,
+    lda_cutoff = lda_cutoff,
+    multigrp_strat = FALSE
+  )
+  
+  marker_df <- extract_lefse_table(lefse_result)
+  
+  saveRDS(
+    lefse_result,
+    file.path(
+      lefse_results_dir,
+      paste0("LEfSe_", dataset_name, "_", comparison_name, ".rds")
+    )
+  )
+  
+  write_csv(
+    marker_df,
+    file.path(
+      lefse_results_dir,
+      paste0("LEfSe_markers_", dataset_name, "_", comparison_name, ".csv")
+    )
+  )
+  
+  lda_plot <- plot_lefse_lda(marker_df, dataset_name, comparison_name)
+  
+  if (!is.null(lda_plot)) {
+    ggsave(
+      filename = file.path(
+        lefse_figures_dir,
+        paste0("LEfSe_LDA_", dataset_name, "_", comparison_name, ".png")
+      ),
+      plot = lda_plot,
+      width = 8,
+      height = max(4, 0.3 * nrow(marker_df) + 2),
+      dpi = 300
+    )
+  }
+  
+  sample_count_df <- as.data.frame(group_counts) %>%
+    rename(group = Var1, n = Freq)
+  
+  write_csv(
+    sample_count_df,
+    file.path(
+      lefse_results_dir,
+      paste0("LEfSe_sample_counts_", dataset_name, "_", comparison_name, ".csv")
+    )
+  )
+  
+  list(
+    lefse_result = lefse_result,
+    markers = marker_df,
+    sample_counts = sample_count_df,
+    lda_cutoff = lda_cutoff
+  )
+}
+
+############################################################
+# 4. Run LEfSe analyses
+############################################################
+
+fungi_sPTB34_lefse <- run_lefse_analysis(
+  matrix_file = fungal_file,
+  dataset_name = "RefSeq_fungi",
+  comparison_name = "sPTB34_yes_vs_no",
+  group_column = "sPTB34",
+  group_levels = c("no", "yes"),
+  lda_cutoff = 1.0
+)
+
+viruses_sPTB34_lefse <- run_lefse_analysis(
+  matrix_file = viral_file,
+  dataset_name = "RefSeq_viruses",
+  comparison_name = "sPTB34_yes_vs_no",
+  group_column = "sPTB34",
+  group_levels = c("no", "yes"),
+  lda_cutoff = 1.0
+)
+
+fungi_outcome_lefse <- run_lefse_analysis(
+  matrix_file = fungal_file,
+  dataset_name = "RefSeq_fungi",
+  comparison_name = "TERM_vs_sPTB",
+  group_column = "outcome",
+  group_levels = c("TERM", "sPTB"),
+  lda_cutoff = 1.0
+)
+
+viruses_outcome_lefse <- run_lefse_analysis(
+  matrix_file = viral_file,
+  dataset_name = "RefSeq_viruses",
+  comparison_name = "TERM_vs_sPTB",
+  group_column = "outcome",
+  group_levels = c("TERM", "sPTB"),
+  lda_cutoff = 1.0
+)
+
+############################################################
+# 5. Combined marker table
+############################################################
+
+combined_lefse_markers <- bind_rows(
+  fungi_sPTB34_lefse$markers %>%
+    mutate(dataset = "RefSeq fungi", comparison = "sPTB34 yes vs no"),
+  viruses_sPTB34_lefse$markers %>%
+    mutate(dataset = "RefSeq viruses", comparison = "sPTB34 yes vs no"),
+  fungi_outcome_lefse$markers %>%
+    mutate(dataset = "RefSeq fungi", comparison = "TERM vs sPTB"),
+  viruses_outcome_lefse$markers %>%
+    mutate(dataset = "RefSeq viruses", comparison = "TERM vs sPTB")
+)
+
+write_csv(
+  combined_lefse_markers,
+  file.path(lefse_results_dir, "LEfSe_combined_marker_table.csv")
+)
+
+############################################################
+# 6. Summary table documenting null LEfSe result
+############################################################
+
+lefse_summary <- data.frame(
+  dataset = c(
+    "RefSeq fungi",
+    "RefSeq viruses",
+    "RefSeq fungi",
+    "RefSeq viruses"
+  ),
+  comparison = c(
+    "sPTB34 yes vs no",
+    "sPTB34 yes vs no",
+    "TERM vs sPTB",
+    "TERM vs sPTB"
+  ),
+  group_1 = c("no", "no", "TERM", "TERM"),
+  group_2 = c("yes", "yes", "sPTB", "sPTB"),
+  group_1_n = c(
+    fungi_sPTB34_lefse$sample_counts$n[1],
+    viruses_sPTB34_lefse$sample_counts$n[1],
+    fungi_outcome_lefse$sample_counts$n[1],
+    viruses_outcome_lefse$sample_counts$n[1]
+  ),
+  group_2_n = c(
+    fungi_sPTB34_lefse$sample_counts$n[2],
+    viruses_sPTB34_lefse$sample_counts$n[2],
+    fungi_outcome_lefse$sample_counts$n[2],
+    viruses_outcome_lefse$sample_counts$n[2]
+  ),
+  lda_cutoff = c(
+    fungi_sPTB34_lefse$lda_cutoff,
+    viruses_sPTB34_lefse$lda_cutoff,
+    fungi_outcome_lefse$lda_cutoff,
+    viruses_outcome_lefse$lda_cutoff
+  ),
+  significant_markers = c(
+    nrow(fungi_sPTB34_lefse$markers),
+    nrow(viruses_sPTB34_lefse$markers),
+    nrow(fungi_outcome_lefse$markers),
+    nrow(viruses_outcome_lefse$markers)
+  )
+)
+
+lefse_summary$interpretation <- ifelse(
+  lefse_summary$significant_markers == 0,
+  "No discriminant taxa identified",
+  "Discriminant taxa detected"
+)
+
+write_csv(
+  lefse_summary,
+  file.path(lefse_results_dir, "LEfSe_summary_table.csv")
+)
+
+
+############################################################
+# 7. Save session information
+############################################################
+
+sink(file.path(lefse_results_dir, "LEfSe_sessionInfo.txt"))
+sessionInfo()
+sink()
+
+message("LEfSe analysis complete.")
+```
+

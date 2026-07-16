@@ -1,0 +1,809 @@
+---
+title: "Logistic regression"
+format: html
+---
+
+
+```{r}
+# Logistic regression for selected RefSeq fungal and viral genera
+
+rm(list = ls())
+
+metadata_file_tsv <- "C:/Users/valfr/OneDrive/Documents/Masters/Research Project/Data/metadata_clean.tsv"
+
+fungal_file <- "C:/Users/valfr/OneDrive/Documents/Masters/Research Project/Data/refseq_fungal_genus_2pct.totalcount_gt_1.prevalence_0p02.tsv"
+
+viral_file <- "C:/Users/valfr/OneDrive/Documents/Masters/Research Project/Data/refseq_viral_genus_2pct.totalcount_gt_1.prevalence_0p02.tsv"
+
+output_dir <- "C:/Users/valfr/OneDrive/Documents/Masters/Research Project/Logistic_regression"
+
+if(!dir.exists(output_dir)){
+  dir.create(output_dir, recursive = TRUE)
+}
+
+# Selected candidate genera carried forward from the shortlist
+
+fungal_candidates <- c(
+  "Puccinia",
+  "Saccharomyces",
+  "Fusarium",
+  "Rhizophagus",
+  "Aspergillus",
+  "Cryptococcus",
+  "Lachancea",
+  "Trichoderma"
+)
+
+viral_candidates <- c(
+  "Shenzhenivirus",
+  "Certrevirus",
+  "Cukevirus",
+  "Fohxhuevirus",
+  "Oryzopoxvirus"
+)
+
+# Metadata is matched using reads_ID only
+
+meta <- read.delim(
+  metadata_file_tsv,
+  sep = "\t",
+  check.names = FALSE
+)
+
+colnames(meta)[1] <- "sample_label"
+
+meta$bmi <- as.numeric(meta$bmi)
+
+# Function to read a RefSeq genus table and match metadata safely
+
+read_and_match <- function(file, meta){
+  
+  mat <- read.delim(
+    file,
+    row.names = 1,
+    check.names = FALSE
+  )
+  
+  matrix_ids_clean <- sub("_1$", "", rownames(mat))
+  
+  unmatched <- setdiff(matrix_ids_clean, meta$reads_ID)
+  
+  if(length(unmatched) > 0){
+    stop("Unmatched samples found: ", paste(unmatched, collapse = ", "))
+  }
+  
+  meta_matched <- meta[
+    match(matrix_ids_clean, meta$reads_ID),
+  ]
+  
+  if(!all(meta_matched$reads_ID == matrix_ids_clean)){
+    stop("Metadata order mismatch")
+  }
+  
+  rownames(mat) <- matrix_ids_clean
+  
+  list(
+    mat = mat,
+    meta = meta_matched
+  )
+}
+
+fungal_data <- read_and_match(fungal_file, meta)
+viral_data  <- read_and_match(viral_file, meta)
+
+# Convert count-like data to relative abundance.
+# If the table is already relative abundance, this will leave it unchanged.
+
+to_relative_abundance <- function(mat){
+  
+  mat <- as.matrix(mat)
+  storage.mode(mat) <- "numeric"
+  
+  row_sums <- rowSums(mat, na.rm = TRUE)
+  
+  if(max(row_sums, na.rm = TRUE) > 1.5){
+    mat <- sweep(mat, 1, row_sums, "/")
+    mat[is.na(mat)] <- 0
+  }
+  
+  mat
+}
+
+fungal_mat <- to_relative_abundance(fungal_data$mat)
+viral_mat  <- to_relative_abundance(viral_data$mat)
+
+fungal_meta <- fungal_data$meta
+viral_meta  <- viral_data$meta
+
+# Outcome coding.
+# The event is coded as 1 so odds ratios represent higher odds of the outcome.
+
+make_binary_outcome <- function(x, event_level, reference_level){
+  
+  x <- as.character(x)
+  
+  keep <- x %in% c(event_level, reference_level)
+  
+  y <- ifelse(x == event_level, 1,
+              ifelse(x == reference_level, 0, NA))
+  
+  list(
+    y = y,
+    keep = keep
+  )
+}
+
+# Logistic regression function for one taxon and one outcome
+
+run_logistic_model <- function(mat, meta, taxon, domain,
+                               outcome_column,
+                               event_level,
+                               reference_level,
+                               adjust_bmi = FALSE){
+  
+  if(!taxon %in% colnames(mat)){
+    return(data.frame(
+      taxon = taxon,
+      domain = domain,
+      outcome = outcome_column,
+      comparison = paste(event_level, "vs", reference_level),
+      model = ifelse(adjust_bmi, "BMI-adjusted", "Unadjusted"),
+      n = NA,
+      n_event = NA,
+      n_reference = NA,
+      n_nonzero = NA,
+      estimate = NA,
+      odds_ratio = NA,
+      ci_lower = NA,
+      ci_upper = NA,
+      p_value = NA,
+      stability_flag = "Taxon not found",
+      stringsAsFactors = FALSE
+    ))
+  }
+  
+  outcome_data <- make_binary_outcome(
+    meta[[outcome_column]],
+    event_level = event_level,
+    reference_level = reference_level
+  )
+  
+  abundance <- as.numeric(mat[, taxon])
+  
+  # Small pseudocount allows zero values to be retained after log transformation
+  
+  pseudocount <- min(abundance[abundance > 0], na.rm = TRUE) / 2
+  
+  if(is.infinite(pseudocount) | is.na(pseudocount)){
+    pseudocount <- 1e-10
+  }
+  
+  taxon_log <- log10(abundance + pseudocount)
+  
+  df <- data.frame(
+    y = outcome_data$y,
+    taxon = taxon_log,
+    bmi = meta$bmi
+  )
+  
+  if(adjust_bmi){
+    df <- df[complete.cases(df[, c("y", "taxon", "bmi")]), ]
+    formula_use <- y ~ taxon + bmi
+  } else {
+    df <- df[complete.cases(df[, c("y", "taxon")]), ]
+    formula_use <- y ~ taxon
+  }
+  
+  n_event <- sum(df$y == 1)
+  n_reference <- sum(df$y == 0)
+  n_nonzero <- sum(abundance[rownames(meta) %in% rownames(meta)] > 0, na.rm = TRUE)
+  
+  if(nrow(df) < 10 | n_event < 3 | n_reference < 3){
+    return(data.frame(
+      taxon = taxon,
+      domain = domain,
+      outcome = outcome_column,
+      comparison = paste(event_level, "vs", reference_level),
+      model = ifelse(adjust_bmi, "BMI-adjusted", "Unadjusted"),
+      n = nrow(df),
+      n_event = n_event,
+      n_reference = n_reference,
+      n_nonzero = sum(abundance > 0, na.rm = TRUE),
+      estimate = NA,
+      odds_ratio = NA,
+      ci_lower = NA,
+      ci_upper = NA,
+      p_value = NA,
+      stability_flag = "Insufficient outcome counts",
+      stringsAsFactors = FALSE
+    ))
+  }
+  
+  warnings_found <- character()
+  
+  fit <- tryCatch(
+    withCallingHandlers(
+      glm(
+        formula_use,
+        data = df,
+        family = binomial()
+      ),
+      warning = function(w){
+        warnings_found <<- c(warnings_found, conditionMessage(w))
+        invokeRestart("muffleWarning")
+      }
+    ),
+    error = function(e){
+      return(NULL)
+    }
+  )
+  
+  if(is.null(fit)){
+    return(data.frame(
+      taxon = taxon,
+      domain = domain,
+      outcome = outcome_column,
+      comparison = paste(event_level, "vs", reference_level),
+      model = ifelse(adjust_bmi, "BMI-adjusted", "Unadjusted"),
+      n = nrow(df),
+      n_event = n_event,
+      n_reference = n_reference,
+      n_nonzero = sum(abundance > 0, na.rm = TRUE),
+      estimate = NA,
+      odds_ratio = NA,
+      ci_lower = NA,
+      ci_upper = NA,
+      p_value = NA,
+      stability_flag = "Model failed",
+      stringsAsFactors = FALSE
+    ))
+  }
+  
+  coef_table <- summary(fit)$coefficients
+  
+  if(!"taxon" %in% rownames(coef_table)){
+    stability_flag <- "Taxon coefficient unavailable"
+    
+    return(data.frame(
+      taxon = taxon,
+      domain = domain,
+      outcome = outcome_column,
+      comparison = paste(event_level, "vs", reference_level),
+      model = ifelse(adjust_bmi, "BMI-adjusted", "Unadjusted"),
+      n = nrow(df),
+      n_event = n_event,
+      n_reference = n_reference,
+      n_nonzero = sum(abundance > 0, na.rm = TRUE),
+      estimate = NA,
+      odds_ratio = NA,
+      ci_lower = NA,
+      ci_upper = NA,
+      p_value = NA,
+      stability_flag = stability_flag,
+      stringsAsFactors = FALSE
+    ))
+  }
+  
+  estimate <- coef_table["taxon", "Estimate"]
+  se <- coef_table["taxon", "Std. Error"]
+  p_value <- coef_table["taxon", "Pr(>|z|)"]
+  
+  odds_ratio <- exp(estimate)
+  ci_lower <- exp(estimate - 1.96 * se)
+  ci_upper <- exp(estimate + 1.96 * se)
+  
+  stability_flag <- "Valid"
+  
+  if(length(warnings_found) > 0){
+    stability_flag <- paste(unique(warnings_found), collapse = "; ")
+  }
+  
+  if(is.infinite(odds_ratio) | is.infinite(ci_lower) | is.infinite(ci_upper) |
+     ci_upper > 1000 | ci_lower < 0.001){
+    stability_flag <- paste(stability_flag, "Potentially unstable estimate", sep = "; ")
+  }
+  
+  if(sum(abundance > 0, na.rm = TRUE) < 5){
+    stability_flag <- paste(stability_flag, "Very low detection count", sep = "; ")
+  }
+  
+  data.frame(
+    taxon = taxon,
+    domain = domain,
+    outcome = outcome_column,
+    comparison = paste(event_level, "vs", reference_level),
+    model = ifelse(adjust_bmi, "BMI-adjusted", "Unadjusted"),
+    n = nrow(df),
+    n_event = n_event,
+    n_reference = n_reference,
+    n_nonzero = sum(abundance > 0, na.rm = TRUE),
+    estimate = estimate,
+    odds_ratio = odds_ratio,
+    ci_lower = ci_lower,
+    ci_upper = ci_upper,
+    p_value = p_value,
+    stability_flag = stability_flag,
+    stringsAsFactors = FALSE
+  )
+}
+
+# Run models for all selected taxa
+
+all_results <- list()
+
+for(taxon in fungal_candidates){
+  
+  all_results[[length(all_results) + 1]] <- run_logistic_model(
+    mat = fungal_mat,
+    meta = fungal_meta,
+    taxon = taxon,
+    domain = "Fungal",
+    outcome_column = "outcome",
+    event_level = "sPTB",
+    reference_level = "TERM",
+    adjust_bmi = FALSE
+  )
+  
+  all_results[[length(all_results) + 1]] <- run_logistic_model(
+    mat = fungal_mat,
+    meta = fungal_meta,
+    taxon = taxon,
+    domain = "Fungal",
+    outcome_column = "outcome",
+    event_level = "sPTB",
+    reference_level = "TERM",
+    adjust_bmi = TRUE
+  )
+  
+  all_results[[length(all_results) + 1]] <- run_logistic_model(
+    mat = fungal_mat,
+    meta = fungal_meta,
+    taxon = taxon,
+    domain = "Fungal",
+    outcome_column = "sPTB34",
+    event_level = "yes",
+    reference_level = "no",
+    adjust_bmi = FALSE
+  )
+  
+  all_results[[length(all_results) + 1]] <- run_logistic_model(
+    mat = fungal_mat,
+    meta = fungal_meta,
+    taxon = taxon,
+    domain = "Fungal",
+    outcome_column = "sPTB34",
+    event_level = "yes",
+    reference_level = "no",
+    adjust_bmi = TRUE
+  )
+}
+
+for(taxon in viral_candidates){
+  
+  all_results[[length(all_results) + 1]] <- run_logistic_model(
+    mat = viral_mat,
+    meta = viral_meta,
+    taxon = taxon,
+    domain = "Viral",
+    outcome_column = "outcome",
+    event_level = "sPTB",
+    reference_level = "TERM",
+    adjust_bmi = FALSE
+  )
+  
+  all_results[[length(all_results) + 1]] <- run_logistic_model(
+    mat = viral_mat,
+    meta = viral_meta,
+    taxon = taxon,
+    domain = "Viral",
+    outcome_column = "outcome",
+    event_level = "sPTB",
+    reference_level = "TERM",
+    adjust_bmi = TRUE
+  )
+  
+  all_results[[length(all_results) + 1]] <- run_logistic_model(
+    mat = viral_mat,
+    meta = viral_meta,
+    taxon = taxon,
+    domain = "Viral",
+    outcome_column = "sPTB34",
+    event_level = "yes",
+    reference_level = "no",
+    adjust_bmi = FALSE
+  )
+  
+  all_results[[length(all_results) + 1]] <- run_logistic_model(
+    mat = viral_mat,
+    meta = viral_meta,
+    taxon = taxon,
+    domain = "Viral",
+    outcome_column = "sPTB34",
+    event_level = "yes",
+    reference_level = "no",
+    adjust_bmi = TRUE
+  )
+}
+
+logistic_results <- do.call(rbind, all_results)
+
+# Format values for easier reading in thesis tables
+
+logistic_results$odds_ratio <- round(logistic_results$odds_ratio, 3)
+logistic_results$ci_lower <- round(logistic_results$ci_lower, 3)
+logistic_results$ci_upper <- round(logistic_results$ci_upper, 3)
+logistic_results$p_value <- signif(logistic_results$p_value, 3)
+
+logistic_results$or_95ci <- ifelse(
+  is.na(logistic_results$odds_ratio),
+  NA,
+  paste0(
+    logistic_results$odds_ratio,
+    " (",
+    logistic_results$ci_lower,
+    "–",
+    logistic_results$ci_upper,
+    ")"
+  )
+)
+
+# Export complete results
+
+write.csv(
+  logistic_results,
+  file.path(output_dir, "selected_refseq_taxa_logistic_regression_results.csv"),
+  row.names = FALSE
+)
+
+# Export a cleaner thesis table
+
+thesis_table <- logistic_results[, c(
+  "domain",
+  "taxon",
+  "outcome",
+  "comparison",
+  "model",
+  "n",
+  "n_event",
+  "n_reference",
+  "n_nonzero",
+  "or_95ci",
+  "p_value",
+  "stability_flag"
+)]
+
+write.csv(
+  thesis_table,
+  file.path(output_dir, "selected_refseq_taxa_logistic_regression_thesis_table.csv"),
+  row.names = FALSE
+)
+
+# Separate fungal and viral outputs
+
+write.csv(
+  subset(thesis_table, domain == "Fungal"),
+  file.path(output_dir, "fungal_logistic_regression_thesis_table.csv"),
+  row.names = FALSE
+)
+
+write.csv(
+  subset(thesis_table, domain == "Viral"),
+  file.path(output_dir, "viral_logistic_regression_thesis_table.csv"),
+  row.names = FALSE
+)
+
+# View results in R
+
+print(thesis_table)
+```
+```{r}
+# BMI-adjusted logistic regression tables and forest plots
+# Only statistically significant and stable taxa are plotted
+
+library(ggplot2)
+library(dplyr)
+
+output_dir <- "C:/Users/valfr/OneDrive/Documents/Masters/Research Project/Logistic_regression"
+
+results_file <- file.path(
+  output_dir,
+  "selected_refseq_taxa_logistic_regression_results.csv"
+)
+
+plot_dir <- file.path(
+  output_dir,
+  "BMI_adjusted_significant_stable_tables_and_plots"
+)
+
+if(!dir.exists(plot_dir)){
+  dir.create(plot_dir, recursive = TRUE)
+}
+
+logistic_results <- read.csv(results_file, check.names = FALSE)
+
+fungal_colours <- c(
+  "Schizosaccharomyces" = "#B143A8",
+  "Lodderomyces" = "#F0E442",
+  "Saccharomyces" = "#56B4E9",
+  "Candida" = "#009E73",
+  "Kwoniella" = "#DDCC77",
+  "Coccidioides" = "#D55E00",
+  "Aspergillus" = "#E69F00",
+  "Fusarium" = "#44AA99",
+  "Trichoderma" = "#CC6677",
+  "Nakaseomyces" = "#882255",
+  "Puccinia" = "#0072B2",
+  "Rhizophagus" = "#332288",
+  "Cryptococcus" = "#88CCEE",
+  "Lachancea" = "#117733",
+  "Sugiyamaella" = "#AA4499",
+  "Thermothele" = "#999933",
+  "Drechmeria" = "#661100",
+  "Eremothecium" = "#6699CC",
+  "Zymoseptoria" = "#AA4466",
+  "Other" = "#BDBDBD"
+)
+
+viral_colours <- c(
+  "Spinunavirus" = "#B143A8",
+  "Orthoflavivirus" = "#DDCC77",
+  "Alphapapillomavirus" = "#E69F00",
+  "Gettysburgvirus" = "#44AA99",
+  "Schiekvirus" = "#CC6677",
+  "Gelderlandvirus" = "#88CCEE",
+  "Epseptimavirus" = "#009E73",
+  "Aurunvirus" = "#D55E00",
+  "Moonvirus" = "#332288",
+  "Cukevirus" = "#56B4E9",
+  "Shenzhenivirus" = "#CC79A7",
+  "Oryzopoxvirus" = "#0072B2",
+  "Certrevirus" = "#882255",
+  "Fohxhuevirus" = "#999933",
+  "Gorganvirus" = "#661100",
+  "Moturavirus" = "#6699CC",
+  "Shandvirus" = "#AA4466",
+  "Cytomegalovirus" = "#F0E442",
+  "Other" = "#BDBDBD"
+)
+
+bmi_results <- logistic_results %>%
+  filter(model == "BMI-adjusted") %>%
+  mutate(
+    outcome_label = case_when(
+      outcome == "outcome" ~ "TERM vs sPTB",
+      outcome == "sPTB34" ~ "sPTB <34 weeks vs others",
+      TRUE ~ outcome
+    ),
+    OR_95CI = ifelse(
+      is.na(odds_ratio),
+      NA,
+      paste0(odds_ratio, " (", ci_lower, "–", ci_upper, ")")
+    ),
+    stable_estimate = case_when(
+      is.na(p_value) ~ FALSE,
+      is.na(odds_ratio) ~ FALSE,
+      is.na(ci_lower) ~ FALSE,
+      is.na(ci_upper) ~ FALSE,
+      is.infinite(odds_ratio) ~ FALSE,
+      is.infinite(ci_lower) ~ FALSE,
+      is.infinite(ci_upper) ~ FALSE,
+      n_nonzero < 5 ~ FALSE,
+      grepl(
+        "failed|insufficient|separation|unstable|very low detection",
+        stability_flag,
+        ignore.case = TRUE
+      ) ~ FALSE,
+      TRUE ~ TRUE
+    ),
+    significant = ifelse(!is.na(p_value) & p_value < 0.05, TRUE, FALSE),
+    plot_status = case_when(
+      significant == TRUE & stable_estimate == TRUE ~ "Significant and stable",
+      significant == TRUE & stable_estimate == FALSE ~ "Significant but unstable",
+      significant == FALSE & stable_estimate == TRUE ~ "Stable but not significant",
+      TRUE ~ "Not significant and/or unstable"
+    )
+  )
+
+make_table_and_plot <- function(data,
+                                domain_name,
+                                outcome_name,
+                                file_stub,
+                                plot_title,
+                                colour_palette){
+  
+  df <- data %>%
+    filter(
+      domain == domain_name,
+      outcome == outcome_name
+    ) %>%
+    arrange(p_value)
+  
+  full_table <- df %>%
+    select(
+      domain,
+      taxon,
+      outcome_label,
+      comparison,
+      n,
+      n_event,
+      n_reference,
+      n_nonzero,
+      odds_ratio,
+      ci_lower,
+      ci_upper,
+      OR_95CI,
+      p_value,
+      stable_estimate,
+      significant,
+      plot_status,
+      stability_flag
+    )
+  
+  write.csv(
+    full_table,
+    file.path(plot_dir, paste0(file_stub, "_full_table.csv")),
+    row.names = FALSE
+  )
+  
+  significant_stable_table <- full_table %>%
+    filter(
+      significant == TRUE,
+      stable_estimate == TRUE
+    )
+  
+  write.csv(
+    significant_stable_table,
+    file.path(plot_dir, paste0(file_stub, "_significant_stable_table.csv")),
+    row.names = FALSE
+  )
+  
+  plot_df <- df %>%
+    filter(
+      significant == TRUE,
+      stable_estimate == TRUE
+    ) %>%
+    mutate(
+      colour_group = ifelse(taxon %in% names(colour_palette), taxon, "Other"),
+      p_label = paste0("p = ", signif(p_value, 2)),
+      taxon = reorder(taxon, odds_ratio)
+    )
+  
+  if(nrow(plot_df) == 0){
+    
+    empty_plot <- ggplot() +
+      annotate(
+        "text",
+        x = 1,
+        y = 1,
+        label = "No significant stable BMI-adjusted associations",
+        size = 5
+      ) +
+      labs(
+        title = plot_title,
+        x = NULL,
+        y = NULL
+      ) +
+      theme_bw() +
+      theme(
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        panel.grid = element_blank()
+      )
+    
+    ggsave(
+      filename = file.path(plot_dir, paste0(file_stub, "_forest_plot.png")),
+      plot = empty_plot,
+      width = 8,
+      height = 5,
+      dpi = 300
+    )
+    
+    return(empty_plot)
+  }
+  
+  x_min <- min(plot_df$ci_lower, na.rm = TRUE) / 1.5
+  x_max <- max(plot_df$ci_upper, na.rm = TRUE) * 2
+  
+  p <- ggplot(
+    plot_df,
+    aes(
+      x = odds_ratio,
+      y = taxon,
+      colour = colour_group
+    )
+  ) +
+    geom_vline(
+      xintercept = 1,
+      linetype = "dashed",
+      linewidth = 0.5
+    ) +
+    geom_errorbarh(
+      aes(
+        xmin = ci_lower,
+        xmax = ci_upper
+      ),
+      height = 0.2,
+      linewidth = 0.8
+    ) +
+    geom_point(size = 3.2) +
+    geom_text(
+      aes(
+        x = ci_upper,
+        label = p_label
+      ),
+      hjust = -0.15,
+      size = 3.5,
+      colour = "black"
+    ) +
+    scale_x_log10(
+      limits = c(x_min, x_max)
+    ) +
+    scale_colour_manual(values = colour_palette, guide = "none") +
+    labs(
+      title = plot_title,
+      x = "Odds ratio (95% confidence interval)",
+      y = "Taxon"
+    ) +
+    theme_bw() +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold", size = 13),
+      axis.title = element_text(face = "bold"),
+      axis.text.y = element_text(size = 10),
+      panel.grid.minor = element_blank()
+    )
+  
+  ggsave(
+    filename = file.path(plot_dir, paste0(file_stub, "_forest_plot.png")),
+    plot = p,
+    width = 8.5,
+    height = 5,
+    dpi = 300
+  )
+  
+  return(p)
+}
+
+make_table_and_plot(
+  data = bmi_results,
+  domain_name = "Fungal",
+  outcome_name = "outcome",
+  file_stub = "fungi_TERM_vs_sPTB_BMI_adjusted",
+  plot_title = "BMI-adjusted fungal associations with spontaneous preterm birth",
+  colour_palette = fungal_colours
+)
+
+make_table_and_plot(
+  data = bmi_results,
+  domain_name = "Fungal",
+  outcome_name = "sPTB34",
+  file_stub = "fungi_sPTB34_BMI_adjusted",
+  plot_title = "BMI-adjusted fungal associations with birth before 34 weeks",
+  colour_palette = fungal_colours
+)
+
+make_table_and_plot(
+  data = bmi_results,
+  domain_name = "Viral",
+  outcome_name = "outcome",
+  file_stub = "viruses_TERM_vs_sPTB_BMI_adjusted",
+  plot_title = "BMI-adjusted viral associations with spontaneous preterm birth",
+  colour_palette = viral_colours
+)
+
+make_table_and_plot(
+  data = bmi_results,
+  domain_name = "Viral",
+  outcome_name = "sPTB34",
+  file_stub = "viruses_sPTB34_BMI_adjusted",
+  plot_title = "BMI-adjusted viral associations with birth before 34 weeks",
+  colour_palette = viral_colours
+)
+
+write.csv(
+  bmi_results,
+  file.path(plot_dir, "all_BMI_adjusted_results_with_stability_classification.csv"),
+  row.names = FALSE
+)
+```
+

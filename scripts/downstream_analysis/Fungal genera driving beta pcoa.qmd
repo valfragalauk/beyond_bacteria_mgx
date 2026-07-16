@@ -1,0 +1,317 @@
+---
+title: "fungal genera driving fungal vbetadiversity PCoA structure"
+format: html
+---
+```{r}
+# ============================================================
+# Identify fungal genera driving RefSeq fungal PCoA structure
+# ============================================================
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(ggplot2)
+  library(ggrepel)
+  library(vegan)
+})
+
+# -----------------------------
+# Paths
+# -----------------------------
+
+project_root <- "C:/Users/valfr/OneDrive/Documents/Masters/Research Project"
+data_dir <- file.path(project_root, "Data")
+results_dir <- file.path(project_root, "Results")
+figures_dir <- file.path(project_root, "Figures")
+
+fungal_file <- file.path(
+  data_dir,
+  "refseq_fungal_genus_2pct.totalcount_gt_1.prevalence_0p02.tsv"
+)
+
+pcoa_file <- file.path(
+  data_dir,
+  "pcoa_coordinates.tsv"
+)
+
+out_dir <- file.path(results_dir, "fungal_pcoa_drivers")
+fig_dir <- file.path(figures_dir, "fungal_pcoa_drivers")
+
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+
+# -----------------------------
+# Settings
+# -----------------------------
+
+pseudocount <- 1e-6
+top_n_labels <- 10
+
+outcome_colours <- c(
+  "TERM" = "#1f77b4",
+  "sPTB 34–37" = "#9467bd",
+  "sPTB <34" = "#ff7f0e"
+)
+
+# ============================================================
+# 1. Read PCoA coordinates
+# ============================================================
+
+pcoa <- read.delim(
+  pcoa_file,
+  sep = "\t",
+  check.names = FALSE
+)
+
+# Create delivery group used in plots
+pcoa <- pcoa %>%
+  mutate(
+    birth_group = case_when(
+      outcome == "TERM" ~ "TERM",
+      outcome == "sPTB" & sPTB34 == "no" ~ "sPTB 34–37",
+      outcome == "sPTB" & sPTB34 == "yes" ~ "sPTB <34",
+      TRUE ~ NA_character_
+    ),
+    birth_group = factor(
+      birth_group,
+      levels = c("TERM", "sPTB 34–37", "sPTB <34")
+    )
+  )
+
+# ============================================================
+# 2. Read fungal genus matrix
+# Rows = samples
+# Columns = fungal genera
+# ============================================================
+
+fungal_counts <- read.delim(
+  fungal_file,
+  row.names = 1,
+  check.names = FALSE
+)
+
+fungal_counts[] <- lapply(fungal_counts, as.numeric)
+fungal_counts <- as.matrix(fungal_counts)
+fungal_counts[is.na(fungal_counts)] <- 0
+
+# Clean matrix sample IDs by removing trailing _1
+fungal_ids_clean <- sub("_1$", "", rownames(fungal_counts))
+rownames(fungal_counts) <- fungal_ids_clean
+
+# ============================================================
+# 3. Match fungal matrix to PCoA coordinates
+# ============================================================
+
+common_ids <- intersect(pcoa$reads_ID, rownames(fungal_counts))
+
+if (length(common_ids) == 0) {
+  stop("No overlapping sample IDs between PCoA coordinates and fungal matrix.")
+}
+
+pcoa_matched <- pcoa %>%
+  filter(reads_ID %in% common_ids) %>%
+  arrange(match(reads_ID, common_ids))
+
+fungal_matched <- fungal_counts[
+  match(pcoa_matched$reads_ID, rownames(fungal_counts)),
+  ,
+  drop = FALSE
+]
+
+if (!all(pcoa_matched$reads_ID == rownames(fungal_matched))) {
+  stop("PCoA and fungal matrix sample order mismatch.")
+}
+
+message("Matched samples: ", nrow(fungal_matched))
+message("Fungal genera: ", ncol(fungal_matched))
+
+# ============================================================
+# 4. Convert fungal counts to relative abundance
+# ============================================================
+
+row_totals <- rowSums(fungal_matched)
+
+fungal_rel <- sweep(fungal_matched, 1, row_totals, "/")
+fungal_rel[is.na(fungal_rel)] <- 0
+
+# Log transform for axis-correlation analysis
+fungal_log <- log10(fungal_rel + pseudocount)
+
+# ============================================================
+# 5. Correlate each genus with PCoA Axis 1 and Axis 2
+# ============================================================
+
+correlation_results <- lapply(colnames(fungal_log), function(genus) {
+  
+  x <- fungal_log[, genus]
+  
+  axis1_test <- suppressWarnings(
+    cor.test(x, pcoa_matched$Axis1, method = "spearman", exact = FALSE)
+  )
+  
+  axis2_test <- suppressWarnings(
+    cor.test(x, pcoa_matched$Axis2, method = "spearman", exact = FALSE)
+  )
+  
+  data.frame(
+    genus = genus,
+    axis1_rho = unname(axis1_test$estimate),
+    axis1_p = axis1_test$p.value,
+    axis2_rho = unname(axis2_test$estimate),
+    axis2_p = axis2_test$p.value
+  )
+}) %>%
+  bind_rows() %>%
+  mutate(
+    axis1_q = p.adjust(axis1_p, method = "BH"),
+    axis2_q = p.adjust(axis2_p, method = "BH"),
+    abs_axis1_rho = abs(axis1_rho),
+    abs_axis2_rho = abs(axis2_rho)
+  )
+
+write.csv(
+  correlation_results,
+  file.path(out_dir, "fungal_genera_correlated_with_pcoa_axes.csv"),
+  row.names = FALSE
+)
+
+top_axis1 <- correlation_results %>%
+  arrange(desc(abs_axis1_rho)) %>%
+  select(genus, axis1_rho, axis1_p, axis1_q) %>%
+  slice_head(n = 20)
+
+top_axis2 <- correlation_results %>%
+  arrange(desc(abs_axis2_rho)) %>%
+  select(genus, axis2_rho, axis2_p, axis2_q) %>%
+  slice_head(n = 20)
+
+write.csv(
+  top_axis1,
+  file.path(out_dir, "top_20_genera_driving_pcoa_axis1.csv"),
+  row.names = FALSE
+)
+
+write.csv(
+  top_axis2,
+  file.path(out_dir, "top_20_genera_driving_pcoa_axis2.csv"),
+  row.names = FALSE
+)
+
+# ============================================================
+# 6. Run envfit
+# This fits fungal genus vectors onto the PCoA ordination
+# ============================================================
+
+ordination <- pcoa_matched %>%
+  select(Axis1, Axis2)
+
+envfit_result <- envfit(
+  ordination,
+  fungal_rel,
+  permutations = 999
+)
+
+envfit_vectors <- as.data.frame(scores(envfit_result, display = "vectors"))
+envfit_vectors$genus <- rownames(envfit_vectors)
+envfit_vectors$r2 <- envfit_result$vectors$r
+envfit_vectors$p_value <- envfit_result$vectors$pvals
+envfit_vectors$q_value <- p.adjust(envfit_vectors$p_value, method = "BH")
+
+envfit_vectors <- envfit_vectors %>%
+  arrange(p_value)
+
+write.csv(
+  envfit_vectors,
+  file.path(out_dir, "envfit_fungal_genera_vectors.csv"),
+  row.names = FALSE
+)
+
+# ============================================================
+# 7. Plot PCoA with top envfit vectors
+# ============================================================
+
+top_vectors <- envfit_vectors %>%
+  arrange(p_value) %>%
+  slice_head(n = top_n_labels)
+
+arrow_multiplier <- 0.8 * min(
+  diff(range(pcoa_matched$Axis1)) / diff(range(top_vectors$Axis1)),
+  diff(range(pcoa_matched$Axis2)) / diff(range(top_vectors$Axis2))
+)
+
+top_vectors <- top_vectors %>%
+  mutate(
+    Axis1_plot = Axis1 * arrow_multiplier,
+    Axis2_plot = Axis2 * arrow_multiplier
+  )
+
+p <- ggplot(pcoa_matched, aes(x = Axis1, y = Axis2, colour = birth_group)) +
+  geom_point(size = 3, alpha = 0.85) +
+  scale_colour_manual(values = outcome_colours, na.value = "grey70") +
+  geom_segment(
+    data = top_vectors,
+    aes(
+      x = 0,
+      y = 0,
+      xend = Axis1_plot,
+      yend = Axis2_plot
+    ),
+    inherit.aes = FALSE,
+    arrow = arrow(length = unit(0.25, "cm")),
+    colour = "black",
+    linewidth = 0.6
+  ) +
+  geom_text_repel(
+    data = top_vectors,
+    aes(
+      x = Axis1_plot,
+      y = Axis2_plot,
+      label = genus
+    ),
+    inherit.aes = FALSE,
+    size = 3,
+    colour = "black",
+    max.overlaps = Inf
+  ) +
+  theme_bw(base_size = 12) +
+  labs(
+    title = "RefSeq fungal PCoA with genus drivers",
+    x = "PCoA Axis 1",
+    y = "PCoA Axis 2",
+    colour = "Delivery group"
+  )
+
+ggsave(
+  file.path(fig_dir, "refseq_fungal_pcoa_with_genus_vectors.png"),
+  p,
+  width = 8,
+  height = 6,
+  dpi = 300
+)
+
+# ============================================================
+# 8. Save simplified interpretation table
+# ============================================================
+
+driver_summary <- envfit_vectors %>%
+  select(genus, Axis1, Axis2, r2, p_value, q_value) %>%
+  mutate(
+    main_direction = case_when(
+      abs(Axis1) >= abs(Axis2) & Axis1 > 0 ~ "Positive Axis1",
+      abs(Axis1) >= abs(Axis2) & Axis1 < 0 ~ "Negative Axis1",
+      abs(Axis2) > abs(Axis1) & Axis2 > 0 ~ "Positive Axis2",
+      abs(Axis2) > abs(Axis1) & Axis2 < 0 ~ "Negative Axis2",
+      TRUE ~ "No clear direction"
+    )
+  )
+
+write.csv(
+  driver_summary,
+  file.path(out_dir, "fungal_pcoa_driver_summary.csv"),
+  row.names = FALSE
+)
+
+message("PCoA driver analysis complete.")
+message("Results saved to: ", out_dir)
+message("Figure saved to: ", fig_dir)
+```
+

@@ -1,0 +1,453 @@
+---
+title: "Maaslin2"
+format: html
+---
+
+
+
+```{r}
+install.packages("BiocManager")
+BiocManager::install("Maaslin2")
+
+```
+```{r}
+library(Maaslin2)
+```
+
+```{r}
+install.packages(c("readr", "dplyr", "tibble"))
+
+```
+
+```{r}
+library(readr)
+library(dplyr)
+library(tibble)
+```
+
+
+```{r}
+# MaAsLin2 RefSeq genus-level association models
+# Purpose: test RefSeq fungal and viral genera against outcome and sPTB34,
+# with unadjusted models.
+
+# -----------------------------
+# Local file paths
+# -----------------------------
+
+data_dir <- "C:/Users/valfr/OneDrive/Documents/Masters/Research Project/Data"
+
+metadata_path <- file.path(data_dir, "metadata_clean.tsv")
+
+fungal_path <- file.path(data_dir, "refseq_fungal_family_2pct.totalcount_gt_1.prevalence_0p02.tsv")
+viral_path  <- file.path(data_dir, "refseq_viral_family_2pct.totalcount_gt_1.prevalence_0p02.tsv")
+
+out_root <- file.path(data_dir, "maaslin2_refseq_family_results")
+dir.create(out_root, recursive = TRUE, showWarnings = FALSE)
+
+# -----------------------------
+# Load matrix and match metadata
+# -----------------------------
+
+load_and_match <- function(matrix_path, metadata_path) {
+  
+  # Load abundance matrix: rows = samples, columns = taxa
+  mat <- read.delim(
+    matrix_path,
+    header = TRUE,
+    row.names = 1,
+    check.names = FALSE,
+    sep = "\t"
+  )
+  
+  # Remove trailing "_1" from sample IDs if present
+  matrix_ids_clean <- sub("_1$", "", rownames(mat))
+  rownames(mat) <- matrix_ids_clean
+  
+  # Load metadata
+  meta <- read.delim(
+    metadata_path,
+    header = TRUE,
+    check.names = FALSE,
+    sep = "\t"
+  )
+  
+  # First metadata column contains ID_1, ID_2, etc.
+  colnames(meta)[1] <- "sample_label"
+  
+  # Check all matrix samples exist in metadata
+  unmatched <- setdiff(matrix_ids_clean, meta$reads_ID)
+  if (length(unmatched) > 0) {
+    stop("Unmatched samples found: ", paste(unmatched, collapse = ", "))
+  }
+  
+  # Match metadata order to matrix order using reads_ID only
+  meta <- meta[match(matrix_ids_clean, meta$reads_ID), ]
+  
+  # Confirm order is correct
+  if (!all(meta$reads_ID == matrix_ids_clean)) {
+    stop("Metadata order mismatch")
+  }
+  
+  rownames(meta) <- meta$reads_ID
+  
+  return(list(mat = mat, meta = meta))
+}
+
+# -----------------------------
+# Prepare metadata
+# -----------------------------
+
+prepare_metadata <- function(meta) {
+  
+  # Main outcome: TERM reference, sPTB comparison group
+  meta$outcome <- factor(meta$outcome, levels = c("TERM", "sPTB"))
+  
+  # Secondary outcome: no reference, yes comparison group
+  meta$sPTB34 <- factor(meta$sPTB34, levels = c("no", "yes"))
+  
+  # BMI adjustment variable
+  meta$bmi <- as.numeric(meta$bmi)  
+  return(meta)
+}
+
+# -----------------------------
+# Run one MaAsLin2 model
+# -----------------------------
+
+run_maaslin_model <- function(mat, meta, dataset_name, outcome_var, adjust_bmi = FALSE) {
+  
+  fixed_effects <- outcome_var
+  
+  if (adjust_bmi) {
+    fixed_effects <- c(outcome_var, "bmi")
+  }
+  
+  keep <- complete.cases(meta[, fixed_effects, drop = FALSE])
+  
+  # MaAsLin2 input data: rows = samples, columns = taxa
+  mat_model <- as.data.frame(mat[keep, , drop = FALSE])
+  
+  # MaAsLin2 metadata: rows = samples, columns = variables only
+  meta_model <- as.data.frame(meta[keep, fixed_effects, drop = FALSE])
+  
+  # Force clean sample IDs
+  sample_ids <- rownames(mat)[keep]
+  rownames(mat_model) <- sample_ids
+  rownames(meta_model) <- sample_ids
+  
+  # Safety checks
+  stopifnot(!any(is.na(rownames(mat_model))))
+  stopifnot(!any(rownames(mat_model) == ""))
+  stopifnot(!any(duplicated(rownames(mat_model))))
+  stopifnot(all(rownames(mat_model) == rownames(meta_model)))
+  
+  model_name <- paste0(
+    dataset_name, "_",
+    outcome_var, "_",
+    ifelse(adjust_bmi, "BMI_adjusted", "unadjusted")
+  )
+  
+  out_dir <- file.path(out_root, model_name)
+  dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+  
+  message("Running: ", model_name)
+  message("Samples: ", nrow(mat_model))
+  message("Taxa: ", ncol(mat_model))
+  message("Sample IDs match: ", all(rownames(mat_model) == rownames(meta_model)))
+  
+  Maaslin2(
+    input_data = mat_model,
+    input_metadata = meta_model,
+    output = out_dir,
+    fixed_effects = fixed_effects,
+    normalization = "TSS",
+    transform = "LOG",
+    analysis_method = "LM",
+    correction = "BH",
+    max_significance = 0.05,
+    standardize = FALSE,
+    plot_heatmap = TRUE,
+    plot_scatter = TRUE
+  )
+  
+  message("Finished: ", model_name)
+}
+
+# -----------------------------
+# Load and prepare datasets
+# -----------------------------
+
+fungi <- load_and_match(fungal_path, metadata_path)
+viruses <- load_and_match(viral_path, metadata_path)
+
+fungi$meta <- prepare_metadata(fungi$meta)
+viruses$meta <- prepare_metadata(viruses$meta)
+
+# -----------------------------
+# RefSeq fungi family
+# -----------------------------
+
+run_maaslin_model(fungi$mat, fungi$meta, "refseq_fungal_family", "outcome", FALSE)
+run_maaslin_model(fungi$mat, fungi$meta, "refseq_fungal_family", "sPTB34", FALSE)
+
+run_maaslin_model(fungi$mat, fungi$meta, "refseq_fungal_family", "outcome", TRUE)
+run_maaslin_model(fungi$mat, fungi$meta, "refseq_fungal_family", "sPTB34", TRUE)
+
+# -----------------------------
+# RefSeq viruses family
+# -----------------------------
+
+run_maaslin_model(viruses$mat, viruses$meta, "refseq_viral_family", "outcome", FALSE)
+run_maaslin_model(viruses$mat, viruses$meta, "refseq_viral_family", "sPTB34", FALSE)
+
+run_maaslin_model(viruses$mat, viruses$meta, "refseq_viral_family", "outcome", TRUE)
+run_maaslin_model(viruses$mat, viruses$meta, "refseq_viral_family", "sPTB34", TRUE)
+
+message("Completed.")
+```
+
+```{r}
+library(dplyr)
+library(readr)
+
+results_dir <- "C:/Users/valfr/OneDrive/Documents/Masters/Research Project/Data/maaslin2_refseq_results"
+
+# Read all MaAsLin2 all_results.tsv files
+maaslin_files <- list.files(
+  results_dir,
+  pattern = "all_results.tsv",
+  recursive = TRUE,
+  full.names = TRUE
+)
+
+all_maaslin <- lapply(maaslin_files, function(file) {
+  
+  model_name <- basename(dirname(file))
+  
+  read_tsv(file, show_col_types = FALSE) %>%
+    mutate(model = model_name)
+  
+}) %>%
+  bind_rows()
+
+# Add interpretation columns
+maaslin_summary <- all_maaslin %>%
+  mutate(
+    result_type = case_when(
+      qval < 0.05 ~ "FDR significant",
+      pval < 0.05 ~ "Nominal p < 0.05 only",
+      TRUE ~ "Not significant"
+    ),
+    direction = case_when(
+      coef > 0 ~ "Higher in comparison group",
+      coef < 0 ~ "Lower in comparison group",
+      TRUE ~ "No direction"
+    )
+  ) %>%
+  select(
+    model,
+    feature,
+    metadata,
+    value,
+    coef,
+    stderr,
+    pval,
+    qval,
+    result_type,
+    direction
+  ) %>%
+  arrange(qval, pval)
+
+# View all FDR-significant and nominal results
+signals_table <- maaslin_summary %>%
+  filter(qval < 0.05 | pval < 0.05) %>%
+  arrange(result_type, qval, pval)
+
+View(signals_table)
+
+# Save table
+write_csv(
+  signals_table,
+  file.path(results_dir, "maaslin2_all_signals_summary.csv")
+)
+```
+
+
+```{r}
+# ============================================================
+# Plot BMI-adjusted MaAsLin2 candidate taxon overview
+# ============================================================
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(readr)
+  library(ggplot2)
+  library(stringr)
+})
+
+results_dir <- "C:/Users/valfr/OneDrive/Documents/Masters/Research Project/Data/maaslin2_refseq_results"
+
+out_dir <- file.path(results_dir, "figures")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+maaslin_files <- list.files(
+  results_dir,
+  pattern = "all_results.tsv",
+  recursive = TRUE,
+  full.names = TRUE
+)
+
+maaslin_files <- maaslin_files[grepl("BMI_adjusted", maaslin_files)]
+
+df <- lapply(maaslin_files, function(file) {
+  model_name <- basename(dirname(file))
+  
+  read_tsv(file, show_col_types = FALSE) %>%
+    mutate(model = model_name)
+}) %>%
+  bind_rows()
+
+plot_df <- df %>%
+  filter(metadata != "bmi") %>%
+  filter(pval < 0.05) %>%
+  mutate(
+    domain = case_when(
+      str_detect(model, "fungal") ~ "Fungal",
+      str_detect(model, "viral") ~ "Viral",
+      TRUE ~ "Other"
+    ),
+    
+    comparison_label = case_when(
+      metadata == "outcome" ~ "TERM vs sPTB",
+      metadata == "sPTB34" ~ "sPTB34 yes vs no",
+      TRUE ~ metadata
+    ),
+    
+    comparison_group = case_when(
+      value == "sPTB" ~ "sPTB",
+      value == "yes" ~ "sPTB <34",
+      TRUE ~ value
+    ),
+    
+    effect = coef,
+    
+    neg_log10_p = -log10(pval),
+    taxon_label = feature
+  ) %>%
+  arrange(domain, comparison_label, pval) %>%
+  group_by(domain, comparison_label) %>%
+  mutate(taxon_label = factor(taxon_label, levels = rev(unique(taxon_label)))) %>%
+  ungroup()
+
+if (nrow(plot_df) == 0) {
+  stop("No BMI-adjusted MaAsLin2 nominal signals with p < 0.05 to plot.")
+}
+
+p <- ggplot(
+  plot_df,
+  aes(
+    x = effect,
+    y = taxon_label,
+    size = neg_log10_p,
+    colour = comparison_group
+  )
+) +
+  geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.4) +
+  geom_point(alpha = 0.9) +
+  facet_grid(domain ~ comparison_label, scales = "free_y", space = "free_y") +
+  scale_colour_manual(
+    values = c(
+      "sPTB" = "#9467bd",
+      "sPTB <34" = "#ff7f0e"
+    )
+  ) +
+  labs(
+    title = "BMI-adjusted MaAsLin2 nominal taxon-level signals",
+    x = "MaAsLin2 coefficient after BMI adjustment",
+    y = NULL,
+    size = "-log10(p-value)",
+    colour = "Comparison group"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    strip.background = element_rect(fill = "white", colour = "black"),
+    strip.text = element_text(face = "bold"),
+    axis.text.y = element_text(size = 8),
+    panel.grid.minor = element_blank(),
+    legend.position = "right"
+  )
+
+ggsave(
+  filename = file.path(out_dir, "BMI_adjusted_maaslin2_candidate_taxon_overview_refseq_only_coloured.png"),
+  plot = p,
+  width = 11,
+  height = 9,
+  dpi = 300
+)
+
+ggsave(
+  filename = file.path(out_dir, "BMI_adjusted_maaslin2_candidate_taxon_overview_refseq_only_coloured.pdf"),
+  plot = p,
+  width = 11,
+  height = 9
+)
+
+message("Figure saved to: ", out_dir)
+```
+
+```{r}
+library(dplyr)
+library(readr)
+
+results_dir <- "C:/Users/valfr/OneDrive/Documents/Masters/Research Project/Data/maaslin2_refseq_family_results"
+
+maaslin_files <- list.files(
+  results_dir,
+  pattern = "all_results.tsv",
+  recursive = TRUE,
+  full.names = TRUE
+)
+
+fdr_significant_results <- lapply(maaslin_files, function(file) {
+  
+  model_name <- basename(dirname(file))
+  
+  read_tsv(file, show_col_types = FALSE) %>%
+    mutate(model = model_name)
+  
+}) %>%
+  bind_rows() %>%
+  filter(qval < 0.05) %>%
+  mutate(
+    direction = case_when(
+      coef > 0 ~ "Higher in comparison group",
+      coef < 0 ~ "Lower in comparison group",
+      TRUE ~ "No direction"
+    )
+  ) %>%
+  select(
+    model,
+    feature,
+    metadata,
+    value,
+    coef,
+    stderr,
+    pval,
+    qval,
+    direction
+  ) %>%
+  arrange(qval, pval)
+
+write_tsv(
+  fdr_significant_results,
+  file.path(results_dir, "maaslin2_FDR_significant_results.tsv")
+)
+
+View(fdr_significant_results)
+
+message("Saved FDR-significant results to: ",
+        file.path(results_dir, "maaslin2_FDR_significant_results.tsv"))
+```
+

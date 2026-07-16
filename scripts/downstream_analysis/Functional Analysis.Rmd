@@ -1,0 +1,444 @@
+---
+title: "Functional Analysis"
+output: html_document
+date: "2026-06-16"
+---
+```{r}
+# ============================================================
+# Exploratory fungal and viral functional potential analysis
+# Vaginal WGS microbiome and spontaneous preterm birth
+# ============================================================
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tibble)
+  library(ggplot2)
+  library(pheatmap)
+})
+
+# -----------------------------
+# Project paths
+# -----------------------------
+
+project_root <- "C:/Users/valfr/OneDrive/Documents/Masters/Research Project"
+data_dir <- file.path(project_root, "Data")
+results_dir <- file.path(project_root, "Results")
+figures_dir <- file.path(project_root, "Figures")
+metadata_file_tsv <- file.path(data_dir, "metadata_clean.tsv")
+
+fungal_function_file <- file.path(data_dir, "fungal_function_wide.csv")
+viral_function_file  <- file.path(data_dir, "viral_geneProduct_matrix.csv")
+
+out_dir <- file.path(results_dir, "exploratory_functional_potential")
+fig_dir <- file.path(figures_dir, "exploratory_functional_potential")
+
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+
+# -----------------------------
+# Analysis settings
+# -----------------------------
+
+min_prevalence <- 0.05
+top_n <- 20
+pseudocount <- 1e-6
+
+outcome_colours <- c(
+  "TERM" = "#1f77b4",
+  "sPTB 34–37" = "#9467bd",
+  "sPTB <34" = "#ff7f0e"
+)
+
+# -----------------------------
+# Helper functions
+# -----------------------------
+
+read_metadata <- function(metadata_file_tsv) {
+  meta <- read.delim(
+    metadata_file_tsv,
+    sep = "\t",
+    check.names = FALSE
+  )
+  
+  colnames(meta)[1] <- "sample_label"
+  meta$bmi <- as.numeric(meta$bmi)
+  
+  meta <- meta %>%
+    mutate(
+      birth_group = case_when(
+        outcome == "TERM" ~ "TERM",
+        outcome == "sPTB" & sPTB34 == "no" ~ "sPTB 34–37",
+        outcome == "sPTB" & sPTB34 == "yes" ~ "sPTB <34",
+        TRUE ~ NA_character_
+      ),
+      birth_group = factor(
+        birth_group,
+        levels = c("TERM", "sPTB 34–37", "sPTB <34")
+      )
+    )
+  
+  return(meta)
+}
+
+clean_numeric_matrix <- function(df) {
+  df <- as.data.frame(df)
+  df[] <- lapply(df, function(x) as.numeric(as.character(x)))
+  mat <- as.matrix(df)
+  mat[is.na(mat)] <- 0
+  return(mat)
+}
+
+align_metadata_to_matrix <- function(mat, meta) {
+  matrix_ids_clean <- sub("_1$", "", rownames(mat))
+  
+  unmatched <- setdiff(matrix_ids_clean, meta$reads_ID)
+  
+  if (length(unmatched) > 0) {
+    stop("Unmatched samples found: ", paste(unmatched, collapse = ", "))
+  }
+  
+  meta_aligned <- meta[
+    match(matrix_ids_clean, meta$reads_ID),
+  ]
+  
+  if (!all(meta_aligned$reads_ID == matrix_ids_clean)) {
+    stop("Metadata order mismatch")
+  }
+  
+  rownames(mat) <- matrix_ids_clean
+  rownames(meta_aligned) <- meta_aligned$reads_ID
+  
+  return(list(mat = mat, meta = meta_aligned))
+}
+
+filter_by_prevalence <- function(mat, min_prevalence = 0.05) {
+  prevalence <- colMeans(mat > 0, na.rm = TRUE)
+  keep <- prevalence >= min_prevalence
+  
+  message("Features before filtering: ", ncol(mat))
+  message("Features after filtering: ", sum(keep))
+  
+  filtered <- mat[, keep, drop = FALSE]
+  return(filtered)
+}
+
+convert_to_relative_abundance <- function(mat) {
+  row_totals <- rowSums(mat, na.rm = TRUE)
+  mat_rel <- sweep(mat, 1, row_totals, "/")
+  mat_rel[is.na(mat_rel)] <- 0
+  return(mat_rel)
+}
+
+remove_zero_variance_features <- function(mat) {
+  feature_sd <- apply(mat, 2, sd, na.rm = TRUE)
+  mat[, feature_sd > 0, drop = FALSE]
+}
+
+make_top_feature_table <- function(mat_counts, mat_rel, domain, output_prefix) {
+  top_table <- data.frame(
+    feature = colnames(mat_counts),
+    total_counts = colSums(mat_counts, na.rm = TRUE),
+    prevalence_n = colSums(mat_counts > 0, na.rm = TRUE),
+    prevalence_percent = round(100 * colMeans(mat_counts > 0, na.rm = TRUE), 2),
+    mean_relative_abundance = colMeans(mat_rel, na.rm = TRUE)
+  ) %>%
+    arrange(desc(total_counts)) %>%
+    slice_head(n = top_n) %>%
+    mutate(domain = domain) %>%
+    select(domain, everything())
+  
+  write.csv(
+    top_table,
+    file.path(out_dir, paste0(output_prefix, "_top_", top_n, "_features.csv")),
+    row.names = FALSE
+  )
+  
+  return(top_table)
+}
+
+make_pca_plot <- function(mat_rel, meta, domain, output_prefix) {
+  mat_log <- log10(mat_rel + pseudocount)
+  mat_log <- remove_zero_variance_features(mat_log)
+  
+  pca <- prcomp(mat_log, center = TRUE, scale. = TRUE)
+  var_exp <- round(100 * summary(pca)$importance[2, 1:2], 1)
+  
+  pca_df <- data.frame(
+    reads_ID = rownames(mat_log),
+    PC1 = pca$x[, 1],
+    PC2 = pca$x[, 2]
+  ) %>%
+    left_join(
+      meta %>% select(reads_ID, sample_label, outcome, sPTB34, birth_group),
+      by = "reads_ID"
+    )
+  
+  p <- ggplot(pca_df, aes(x = PC1, y = PC2, colour = birth_group)) +
+    geom_point(size = 3, alpha = 0.85) +
+    scale_colour_manual(values = outcome_colours, na.value = "grey70") +
+    theme_bw(base_size = 12) +
+    labs(
+      title = paste(domain, "functional potential PCA"),
+      x = paste0("PC1 (", var_exp[1], "%)"),
+      y = paste0("PC2 (", var_exp[2], "%)"),
+      colour = "Outcome group"
+    )
+  
+  ggsave(
+    file.path(fig_dir, paste0(output_prefix, "_PCA.png")),
+    p,
+    width = 7,
+    height = 5,
+    dpi = 300
+  )
+  
+  write.csv(
+    pca_df,
+    file.path(out_dir, paste0(output_prefix, "_PCA_coordinates.csv")),
+    row.names = FALSE
+  )
+  
+  return(p)
+}
+
+run_top_feature_wilcoxon <- function(mat_rel, meta, top_features, output_prefix) {
+  results <- lapply(top_features, function(feature) {
+    dat <- data.frame(
+      abundance = mat_rel[, feature],
+      outcome = meta$outcome,
+      sPTB34 = meta$sPTB34
+    )
+    
+    term_sptb_p <- wilcox.test(
+      abundance ~ outcome,
+      data = dat %>% filter(outcome %in% c("TERM", "sPTB")),
+      exact = FALSE
+    )$p.value
+    
+    sptb34_p <- wilcox.test(
+      abundance ~ sPTB34,
+      data = dat %>% filter(!is.na(sPTB34)),
+      exact = FALSE
+    )$p.value
+    
+    data.frame(
+      feature = feature,
+      median_TERM = median(dat$abundance[dat$outcome == "TERM"], na.rm = TRUE),
+      median_sPTB = median(dat$abundance[dat$outcome == "sPTB"], na.rm = TRUE),
+      term_vs_sptb_p = term_sptb_p,
+      sptb34_yes_no_p = sptb34_p
+    )
+  }) %>%
+    bind_rows() %>%
+    mutate(
+      term_vs_sptb_q = p.adjust(term_vs_sptb_p, method = "BH"),
+      sptb34_yes_no_q = p.adjust(sptb34_yes_no_p, method = "BH")
+    ) %>%
+    arrange(term_vs_sptb_p)
+  
+  write.csv(
+    results,
+    file.path(out_dir, paste0(output_prefix, "_top_feature_wilcoxon.csv")),
+    row.names = FALSE
+  )
+  
+  return(results)
+}
+
+make_top_feature_heatmap <- function(mat_rel, meta, top_features, output_prefix) {
+  
+  heat_mat <- mat_rel[, top_features, drop = FALSE]
+  heat_mat <- log10(heat_mat + pseudocount)
+  
+  row_annotation <- data.frame(
+    Delivery_group = meta$birth_group
+  )
+  rownames(row_annotation) <- rownames(meta)
+  
+  annotation_colours <- list(
+    Delivery_group = c(
+      "TERM" = "#1f77b4",
+      "sPTB 34–37" = "#9467bd",
+      "sPTB <34" = "#ff7f0e"
+    )
+  )
+  
+  heatmap_colours <- colorRampPalette(
+    c("#440154", "#31688e", "#35b779", "#fde725")
+  )(100)
+  
+  pheatmap(
+    heat_mat,
+    color = heatmap_colours,
+    annotation_row = row_annotation,
+    annotation_colors = annotation_colours,
+    cluster_rows = TRUE,
+    cluster_cols = TRUE,
+    show_rownames = FALSE,
+    show_colnames = TRUE,
+    scale = "column",
+    fontsize_col = 8,
+    fontsize_row = 6,
+    angle_col = 90,
+    border_color = NA,
+    main = paste0(
+      ifelse(output_prefix == "fungal", "Fungal", "Viral/phage"),
+      " functional potential — Top ",
+      length(top_features),
+      " features"
+    ),
+    filename = file.path(fig_dir, paste0(output_prefix, "_top_features_heatmap.png")),
+    width = 10,
+    height = 7
+  )
+}
+
+# ============================================================
+# Load metadata
+# ============================================================
+
+meta <- read_metadata(metadata_file_tsv)
+
+# ============================================================
+# Fungal functional potential analysis
+# Input format:
+# rows = samples
+# columns = fungal protein features
+# values = read counts
+# ============================================================
+
+fungal_raw <- read.csv(
+  fungal_function_file,
+  row.names = 1,
+  check.names = FALSE
+)
+
+fungal_mat <- clean_numeric_matrix(fungal_raw)
+
+fungal_aligned <- align_metadata_to_matrix(fungal_mat, meta)
+fungal_mat <- fungal_aligned$mat
+fungal_meta <- fungal_aligned$meta
+
+fungal_filtered <- filter_by_prevalence(fungal_mat, min_prevalence)
+fungal_rel <- convert_to_relative_abundance(fungal_filtered)
+
+fungal_top <- make_top_feature_table(
+  mat_counts = fungal_filtered,
+  mat_rel = fungal_rel,
+  domain = "Fungal",
+  output_prefix = "fungal"
+)
+
+fungal_pca <- make_pca_plot(
+  mat_rel = fungal_rel,
+  meta = fungal_meta,
+  domain = "Fungal",
+  output_prefix = "fungal"
+)
+
+fungal_wilcox <- run_top_feature_wilcoxon(
+  mat_rel = fungal_rel,
+  meta = fungal_meta,
+  top_features = fungal_top$feature,
+  output_prefix = "fungal"
+)
+
+make_top_feature_heatmap(
+  mat_rel = fungal_rel,
+  meta = fungal_meta,
+  top_features = fungal_top$feature,
+  output_prefix = "fungal"
+)
+
+# ============================================================
+# Viral/phage functional potential analysis
+# Input expected:
+# rows = samples OR gene products
+# columns = gene products OR samples
+# The script checks orientation automatically.
+# ============================================================
+
+viral_raw <- read.csv(
+  viral_function_file,
+  check.names = FALSE
+)
+
+first_col <- viral_raw[[1]]
+viral_body <- viral_raw[, -1, drop = FALSE]
+
+rownames(viral_body) <- first_col
+viral_body <- clean_numeric_matrix(viral_body)
+
+sample_overlap_rows <- sum(sub("_1$", "", rownames(viral_body)) %in% meta$reads_ID)
+sample_overlap_cols <- sum(sub("_1$", "", colnames(viral_body)) %in% meta$reads_ID)
+
+if (sample_overlap_rows >= sample_overlap_cols) {
+  viral_mat <- viral_body
+} else {
+  viral_mat <- t(viral_body)
+}
+
+viral_aligned <- align_metadata_to_matrix(viral_mat, meta)
+viral_mat <- viral_aligned$mat
+viral_meta <- viral_aligned$meta
+
+viral_filtered <- filter_by_prevalence(viral_mat, min_prevalence)
+viral_rel <- convert_to_relative_abundance(viral_filtered)
+
+viral_top <- make_top_feature_table(
+  mat_counts = viral_filtered,
+  mat_rel = viral_rel,
+  domain = "Viral/phage",
+  output_prefix = "viral"
+)
+
+viral_pca <- make_pca_plot(
+  mat_rel = viral_rel,
+  meta = viral_meta,
+  domain = "Viral/phage",
+  output_prefix = "viral"
+)
+
+viral_wilcox <- run_top_feature_wilcoxon(
+  mat_rel = viral_rel,
+  meta = viral_meta,
+  top_features = viral_top$feature,
+  output_prefix = "viral"
+)
+
+make_top_feature_heatmap(
+  mat_rel = viral_rel,
+  meta = viral_meta,
+  top_features = viral_top$feature,
+  output_prefix = "viral"
+)
+
+# ============================================================
+# Combined output
+# ============================================================
+
+combined_top_features <- bind_rows(fungal_top, viral_top)
+
+write.csv(
+  combined_top_features,
+  file.path(out_dir, "combined_top_functional_features.csv"),
+  row.names = FALSE
+)
+
+combined_wilcox <- bind_rows(
+  fungal_wilcox %>% mutate(domain = "Fungal"),
+  viral_wilcox %>% mutate(domain = "Viral/phage")
+) %>%
+  select(domain, everything())
+
+write.csv(
+  combined_wilcox,
+  file.path(out_dir, "combined_top_feature_wilcoxon.csv"),
+  row.names = FALSE
+)
+
+message("Exploratory functional potential analysis complete.")
+message("Results saved to: ", out_dir)
+message("Figures saved to: ", fig_dir)
+```
+

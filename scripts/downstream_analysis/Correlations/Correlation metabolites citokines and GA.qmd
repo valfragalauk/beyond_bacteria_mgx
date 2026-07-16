@@ -1,0 +1,910 @@
+---
+title: "Correlation"
+format: html
+
+
+```{r}
+
+############################################################
+# Host–microbiome correlation analysis
+# Shortlisted fungi/viruses vs cytokines, metabolites,
+# and gestational age at delivery
+############################################################
+
+library(tidyverse)
+library(ggplot2)
+library(pheatmap)
+library(ggpubr)
+
+project_root <- "C:/Users/valfr/OneDrive/Documents/Masters/Research Project"
+data_dir     <- file.path(project_root, "Data")
+results_dir  <- file.path(project_root, "Results")
+figures_dir  <- file.path(project_root, "Figures")
+
+metadata_file_tsv <- file.path(data_dir, "metadata_clean.tsv")
+
+fungal_file <- file.path(
+  data_dir,
+  "refseq_fungal_genus_2pct.totalcount_gt_1.prevalence_0p02.tsv"
+)
+
+viral_file <- file.path(
+  data_dir,
+  "refseq_viral_genus_2pct.totalcount_gt_1.prevalence_0p02.tsv"
+)
+
+output_dir <- file.path(results_dir, "host_microbiome_correlations")
+figure_dir <- file.path(figures_dir, "host_microbiome_correlations")
+
+dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+dir.create(figure_dir, showWarnings = FALSE, recursive = TRUE)
+
+shortlisted_fungi <- c(
+  "Puccinia",
+  "Saccharomyces",
+  "Aspergillus",
+  "Cryptococcus",
+  "Fusarium",
+  "Lachancea",
+  "Rhizophagus",
+  "Trichoderma",
+  "Drechmeria",
+  "Eremothecium",
+  "Schizosaccharomyces",
+  "Sugiyamaella",
+  "Thermothelomyces",
+  "Zymoseptoria"
+)
+
+shortlisted_viruses <- c(
+  "Shenzhenivirus",
+  "Certrevirus",
+  "Cukevirus",
+  "Fohxhuevirus",
+  "Oryzopoxvirus",
+  "Cytomegalovirus",
+  "Gorganvirus",
+  "Moturavirus",
+  "Shandvirus"
+)
+
+metabolite_cols <- c(
+  "Acetate", "Alanine", "Asparagine", "Aspartate",
+  "Cadaverine_t", "Lysine", "Choline", "Ethanol",
+  "Formate", "Glucose", "Maltose", "Glutamate",
+  "Glutamine", "Isoleucine", "Lactate", "Leucine",
+  "Methionine", "Phenylalanine", "Putrescine",
+  "Succinate", "Threonine", "Tyrosine", "Tyramine",
+  "Uracil", "Valine", "Pyruvate", "Taurine",
+  "Betaine", "Tryptophan"
+)
+
+cytokine_cols <- c(
+  "C5", "C5a", "GCSF", "IFNg", "IgM",
+  "IL10", "IL13", "IL17A", "IL22",
+  "IL5", "IL6", "IL8", "MCP1",
+  "IL37_pg_mL"
+)
+
+outcome_cols <- c(
+  "sample_label",
+  "reads_ID",
+  "bmi",
+  "outcome",
+  "sPTB34",
+  "Ges_del_days"
+)
+
+meta <- read.delim(
+  metadata_file_tsv,
+  sep = "\t",
+  check.names = FALSE
+)
+
+colnames(meta)[1] <- "sample_label"
+
+required_cols <- c(
+  outcome_cols,
+  metabolite_cols,
+  cytokine_cols
+)
+
+missing_cols <- setdiff(required_cols, colnames(meta))
+
+if (length(missing_cols) > 0) {
+  stop(
+    "These required metadata columns are missing: ",
+    paste(missing_cols, collapse = ", ")
+  )
+}
+
+meta$bmi <- as.numeric(meta$bmi)
+meta$Ges_del_days <- as.numeric(meta$Ges_del_days)
+
+meta$outcome <- factor(
+  meta$outcome,
+  levels = c("TERM", "sPTB")
+)
+
+meta$sPTB34 <- factor(
+  meta$sPTB34,
+  levels = c("no", "yes")
+)
+
+read_microbiome_matrix <- function(file_path, meta) {
+  
+  mat <- read.delim(
+    file_path,
+    row.names = 1,
+    check.names = FALSE
+  )
+  
+  matrix_ids_clean <- sub("_1$", "", rownames(mat))
+  
+  unmatched <- setdiff(matrix_ids_clean, meta$reads_ID)
+  
+  if (length(unmatched) > 0) {
+    stop(
+      "Unmatched samples found: ",
+      paste(unmatched, collapse = ", ")
+    )
+  }
+  
+  meta_matched <- meta[
+    match(matrix_ids_clean, meta$reads_ID),
+  ]
+  
+  if (!all(meta_matched$reads_ID == matrix_ids_clean)) {
+    stop("Metadata order mismatch")
+  }
+  
+  rownames(mat) <- matrix_ids_clean
+  rownames(meta_matched) <- matrix_ids_clean
+  
+  mat <- as.data.frame(mat)
+  mat[] <- lapply(mat, as.numeric)
+  
+  return(
+    list(
+      mat = mat,
+      meta = meta_matched
+    )
+  )
+}
+
+relative_abundance_if_needed <- function(mat) {
+  
+  row_sums <- rowSums(mat, na.rm = TRUE)
+  
+  if (max(mat, na.rm = TRUE) > 1 || median(row_sums, na.rm = TRUE) > 1.5) {
+    mat <- sweep(mat, 1, row_sums, "/")
+    mat[is.na(mat)] <- 0
+  }
+  
+  return(mat)
+}
+
+log_transform_abundance <- function(mat) {
+  
+  min_positive <- min(mat[mat > 0], na.rm = TRUE)
+  pseudocount <- min_positive / 2
+  
+  mat_log <- log10(mat + pseudocount)
+  
+  return(mat_log)
+}
+
+prepare_host_matrix <- function(meta, selected_cols) {
+  
+  host <- meta[, selected_cols, drop = FALSE]
+  rownames(host) <- meta$reads_ID
+  
+  host[] <- lapply(host, function(x) as.numeric(as.character(x)))
+  
+  for (feature in colnames(host)) {
+    
+    x <- host[[feature]]
+    
+    if (all(is.na(x))) next
+    
+    if (min(x, na.rm = TRUE) >= 0) {
+      
+      min_positive <- min(x[x > 0], na.rm = TRUE)
+      
+      if (is.finite(min_positive)) {
+        x <- log10(x + min_positive / 2)
+      }
+    }
+    
+    host[[feature]] <- as.numeric(scale(x))
+  }
+  
+  return(host)
+}
+
+fungal_obj <- read_microbiome_matrix(fungal_file, meta)
+viral_obj  <- read_microbiome_matrix(viral_file, meta)
+
+fungal_mat <- fungal_obj$mat
+viral_mat  <- viral_obj$mat
+
+fungal_mat <- relative_abundance_if_needed(fungal_mat)
+viral_mat  <- relative_abundance_if_needed(viral_mat)
+
+fungal_mat_log <- log_transform_abundance(fungal_mat)
+viral_mat_log  <- log_transform_abundance(viral_mat)
+
+fungal_short <- fungal_mat_log[
+  ,
+  intersect(shortlisted_fungi, colnames(fungal_mat_log)),
+  drop = FALSE
+]
+
+viral_short <- viral_mat_log[
+  ,
+  intersect(shortlisted_viruses, colnames(viral_mat_log)),
+  drop = FALSE
+]
+
+missing_fungi <- setdiff(shortlisted_fungi, colnames(fungal_short))
+missing_viruses <- setdiff(shortlisted_viruses, colnames(viral_short))
+
+if (length(missing_fungi) > 0) {
+  warning(
+    "These shortlisted fungal taxa were not found in the fungal matrix: ",
+    paste(missing_fungi, collapse = ", ")
+  )
+}
+
+if (length(missing_viruses) > 0) {
+  warning(
+    "These shortlisted viral taxa were not found in the viral matrix: ",
+    paste(missing_viruses, collapse = ", ")
+  )
+}
+
+cytokines <- prepare_host_matrix(meta, cytokine_cols)
+metabolites <- prepare_host_matrix(meta, metabolite_cols)
+
+gestational_age <- meta %>%
+  select(reads_ID, Ges_del_days) %>%
+  mutate(Ges_del_days = as.numeric(Ges_del_days)) %>%
+  column_to_rownames("reads_ID")
+
+run_taxa_host_associations <- function(taxa_mat, host_mat, meta, taxa_group, host_group) {
+  
+  common_ids <- Reduce(
+    intersect,
+    list(
+      rownames(taxa_mat),
+      rownames(host_mat),
+      meta$reads_ID
+    )
+  )
+  
+  taxa_mat <- taxa_mat[common_ids, , drop = FALSE]
+  host_mat <- host_mat[common_ids, , drop = FALSE]
+  meta_use <- meta[match(common_ids, meta$reads_ID), ]
+  
+  results <- list()
+  
+  for (taxon in colnames(taxa_mat)) {
+    
+    for (host_feature in colnames(host_mat)) {
+      
+      df <- data.frame(
+        sample_id = common_ids,
+        taxon_value = taxa_mat[[taxon]],
+        host_value = host_mat[[host_feature]],
+        bmi = meta_use$bmi,
+        outcome = meta_use$outcome
+      ) %>%
+        filter(
+          is.finite(taxon_value),
+          is.finite(host_value),
+          is.finite(bmi),
+          !is.na(outcome)
+        )
+      
+      if (nrow(df) < 15) next
+      
+      spearman_test <- suppressWarnings(
+        cor.test(
+          df$taxon_value,
+          df$host_value,
+          method = "spearman",
+          exact = FALSE
+        )
+      )
+      
+      model_bmi <- lm(
+        host_value ~ taxon_value + bmi,
+        data = df
+      )
+      
+      model_bmi_outcome <- lm(
+        host_value ~ taxon_value + bmi + outcome,
+        data = df
+      )
+      
+      model_bmi_taxon <- tidy(model_bmi) %>%
+        filter(term == "taxon_value")
+      
+      model_bmi_outcome_taxon <- tidy(model_bmi_outcome) %>%
+        filter(term == "taxon_value")
+      
+      results[[paste(taxon, host_feature, sep = "_")]] <- data.frame(
+        taxa_group = taxa_group,
+        host_group = host_group,
+        taxon = taxon,
+        host_feature = host_feature,
+        n = nrow(df),
+        spearman_rho = unname(spearman_test$estimate),
+        spearman_p = spearman_test$p.value,
+        bmi_adjusted_beta = model_bmi_taxon$estimate,
+        bmi_adjusted_p = model_bmi_taxon$p.value,
+        bmi_adjusted_r2 = glance(model_bmi)$r.squared,
+        bmi_outcome_adjusted_beta = model_bmi_outcome_taxon$estimate,
+        bmi_outcome_adjusted_p = model_bmi_outcome_taxon$p.value,
+        bmi_outcome_adjusted_r2 = glance(model_bmi_outcome)$r.squared
+      )
+    }
+  }
+  
+  results_df <- bind_rows(results) %>%
+    mutate(
+      spearman_q = p.adjust(spearman_p, method = "BH"),
+      bmi_adjusted_q = p.adjust(bmi_adjusted_p, method = "BH"),
+      bmi_outcome_adjusted_q = p.adjust(bmi_outcome_adjusted_p, method = "BH")
+    ) %>%
+    arrange(spearman_p)
+  
+  return(results_df)
+}
+
+fungi_cytokines <- run_taxa_host_associations(
+  taxa_mat = fungal_short,
+  host_mat = cytokines,
+  meta = meta,
+  taxa_group = "Fungi",
+  host_group = "Cytokines"
+)
+
+viruses_cytokines <- run_taxa_host_associations(
+  taxa_mat = viral_short,
+  host_mat = cytokines,
+  meta = meta,
+  taxa_group = "Viruses",
+  host_group = "Cytokines"
+)
+
+fungi_metabolites <- run_taxa_host_associations(
+  taxa_mat = fungal_short,
+  host_mat = metabolites,
+  meta = meta,
+  taxa_group = "Fungi",
+  host_group = "Metabolites"
+)
+
+viruses_metabolites <- run_taxa_host_associations(
+  taxa_mat = viral_short,
+  host_mat = metabolites,
+  meta = meta,
+  taxa_group = "Viruses",
+  host_group = "Metabolites"
+)
+
+fungi_gestational_age <- run_taxa_host_associations(
+  taxa_mat = fungal_short,
+  host_mat = gestational_age,
+  meta = meta,
+  taxa_group = "Fungi",
+  host_group = "Gestational age at delivery"
+)
+
+viruses_gestational_age <- run_taxa_host_associations(
+  taxa_mat = viral_short,
+  host_mat = gestational_age,
+  meta = meta,
+  taxa_group = "Viruses",
+  host_group = "Gestational age at delivery"
+)
+
+all_results <- bind_rows(
+  fungi_cytokines,
+  viruses_cytokines,
+  fungi_metabolites,
+  viruses_metabolites,
+  fungi_gestational_age,
+  viruses_gestational_age
+)
+
+all_results <- all_results %>%
+  mutate(
+    direction = case_when(
+      spearman_rho > 0 ~ "Positive association",
+      spearman_rho < 0 ~ "Negative association",
+      TRUE ~ "No direction"
+    ),
+    interpretation_level = case_when(
+      spearman_q < 0.05 |
+        bmi_adjusted_q < 0.05 |
+        bmi_outcome_adjusted_q < 0.05 ~ "FDR-significant",
+      spearman_p < 0.05 |
+        bmi_adjusted_p < 0.05 |
+        bmi_outcome_adjusted_p < 0.05 ~ "Nominally significant",
+      TRUE ~ "Not significant"
+    )
+  )
+
+write.csv(
+  all_results,
+  file.path(output_dir, "all_taxa_host_association_results.csv"),
+  row.names = FALSE
+)
+
+nominal_results <- all_results %>%
+  filter(interpretation_level != "Not significant") %>%
+  arrange(spearman_p)
+
+write.csv(
+  nominal_results,
+  file.path(output_dir, "nominally_significant_taxa_host_associations.csv"),
+  row.names = FALSE
+)
+
+ranked_summary <- all_results %>%
+  arrange(spearman_p)
+
+write.csv(
+  ranked_summary,
+  file.path(output_dir, "ranked_taxa_host_association_summary.csv"),
+  row.names = FALSE
+)
+
+plot_association_heatmap <- function(results_df, title, output_name) {
+  
+  if (nrow(results_df) == 0) return(NULL)
+  
+  rho_mat <- results_df %>%
+    select(taxon, host_feature, spearman_rho) %>%
+    pivot_wider(
+      names_from = host_feature,
+      values_from = spearman_rho
+    ) %>%
+    column_to_rownames("taxon") %>%
+    as.matrix()
+  
+  sig_mat <- results_df %>%
+    mutate(
+      sig = case_when(
+        spearman_q < 0.05 ~ "**",
+        spearman_p < 0.05 ~ "*",
+        TRUE ~ ""
+      )
+    ) %>%
+    select(taxon, host_feature, sig) %>%
+    pivot_wider(
+      names_from = host_feature,
+      values_from = sig
+    ) %>%
+    column_to_rownames("taxon") %>%
+    as.matrix()
+  
+  pheatmap(
+    rho_mat,
+    display_numbers = sig_mat,
+    cluster_rows = TRUE,
+    cluster_cols = TRUE,
+    main = title,
+    filename = file.path(figure_dir, output_name),
+    width = 11,
+    height = 6
+  )
+}
+
+plot_association_heatmap(
+  fungi_cytokines,
+  "Shortlisted fungal taxa vs cytokines",
+  "fungi_vs_cytokines_heatmap.pdf"
+)
+
+plot_association_heatmap(
+  viruses_cytokines,
+  "Shortlisted viral taxa vs cytokines",
+  "viruses_vs_cytokines_heatmap.pdf"
+)
+
+plot_association_heatmap(
+  fungi_metabolites,
+  "Shortlisted fungal taxa vs metabolites",
+  "fungi_vs_metabolites_heatmap.pdf"
+)
+
+plot_association_heatmap(
+  viruses_metabolites,
+  "Shortlisted viral taxa vs metabolites",
+  "viruses_vs_metabolites_heatmap.pdf"
+)
+
+
+message("Analysis complete.")
+message("Results saved to: ", output_dir)
+message("Figures saved to: ", figure_dir)
+
+```
+
+```{r}
+############################################################
+# Separate fungal and viral results
+############################################################
+
+fungal_results <- all_results %>%
+  filter(taxa_group == "Fungi")
+
+viral_results <- all_results %>%
+  filter(taxa_group == "Viruses")
+
+write.csv(
+  fungal_results,
+  file.path(output_dir, "fungal_taxa_host_associations.csv"),
+  row.names = FALSE
+)
+
+write.csv(
+  viral_results,
+  file.path(output_dir, "viral_taxa_host_associations.csv"),
+  row.names = FALSE
+)
+
+fungal_results_fdr <- fungal_results %>%
+  filter(spearman_q < 0.05)
+
+viral_results_fdr <- viral_results %>%
+  filter(spearman_q < 0.05)
+
+write.csv(
+  fungal_results_fdr,
+  file.path(output_dir, "fungal_taxa_host_associations_FDR_significant.csv"),
+  row.names = FALSE
+)
+
+write.csv(
+  viral_results_fdr,
+  file.path(output_dir, "viral_taxa_host_associations_FDR_significant.csv"),
+  row.names = FALSE
+)
+```
+
+
+
+```{r}
+############################################################
+# Taxa selection
+############################################################
+
+
+library(tidyverse)
+library(ggpubr)
+
+focused_plot_dir <- file.path(figure_dir, "focused_thesis_plots_PTB_guided")
+
+dir.create(
+  focused_plot_dir,
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+# -----------------------------
+# Associations to plot
+# -----------------------------
+
+focused_hits <- tribble(
+  ~taxa_group, ~host_group, ~taxon,          ~host_feature,   ~figure_reason,
+
+  # PTB-linked fungal immune associations
+  "Fungi",     "Cytokines",   "Aspergillus",  "IL37_pg_mL",   "Stable PTB-associated fungal taxon with immune association",
+  "Fungi",     "Cytokines",   "Fusarium",     "IL37_pg_mL",   "Stable PTB-associated fungal taxon with immune association",
+
+  # PTB-linked clinical association
+  "Fungi",     "Gestational age at delivery", "Aspergillus", "Ges_del_days", "Stable PTB-associated fungal taxon linked to gestational age",
+
+  # PTB-linked viral immune association
+  "Viruses",   "Cytokines",   "Shenzhenivirus", "IL6",        "Stable PTB-associated viral taxon with inflammatory cytokine association",
+
+  # PTB-linked fungal metabolite associations
+  "Fungi",     "Metabolites", "Cryptococcus", "Succinate",    "Stable sPTB34-associated fungal taxon with dysbiosis-related metabolite association",
+  "Fungi",     "Metabolites", "Puccinia",     "Succinate",    "Stable sPTB34-associated fungal taxon with dysbiosis-related metabolite association",
+
+  # Strong exploratory metabolite associations
+  "Viruses",   "Metabolites", "Fohxhuevirus", "Putrescine",   "Strongest exploratory viral-metabolite association",
+  "Viruses",   "Metabolites", "Fohxhuevirus", "Lactate",      "Exploratory viral-metabolite association linked to vaginal homeostasis"
+)
+
+# Keep only associations that were actually significant in the results table
+focused_hits <- focused_hits %>%
+  inner_join(
+    all_results %>%
+      filter(
+        spearman_q < 0.05 |
+          bmi_adjusted_q < 0.05 |
+          bmi_outcome_adjusted_q < 0.05
+      ),
+    by = c("taxa_group", "host_group", "taxon", "host_feature")
+  )
+############################################################
+# Publication display labels
+############################################################
+
+display_labels <- c(
+
+  # Cytokines
+  "IL37_pg_mL" = "IL-37",
+  "IL6" = "IL-6",
+  "IL8" = "IL-8",
+  "IL10" = "IL-10",
+  "IFNg" = "Interferon-γ",
+  "GCSF" = "G-CSF",
+  "C5" = "Complement C5",
+  "C5a" = "Complement C5a",
+  "IgM" = "Immunoglobulin M (IgM)",
+  "MCP1" = "MCP-1",
+
+  # Metabolites
+  "Putrescine" = "Putrescine",
+  "Cadaverine_t" = "Cadaverine",
+  "Tyramine" = "Tyramine",
+  "Succinate" = "Succinate",
+  "Lactate" = "Lactate",
+  "Phenylalanine" = "Phenylalanine",
+  "Tyrosine" = "Tyrosine",
+  "Glutamine" = "Glutamine",
+  "Glutamate" = "Glutamate",
+  "Formate" = "Formate",
+
+  # Clinical variables
+  "Ges_del_days" = "Gestational Age"
+)
+
+# -----------------------------
+# Clean plotting function
+# -----------------------------
+
+make_clean_focused_plot <- function(taxa_group,
+                                    host_group,
+                                    taxon,
+                                    host_feature,
+                                    figure_reason) {
+
+  if (taxa_group == "Fungi") {
+    taxa_mat <- fungal_short
+  } else {
+    taxa_mat <- viral_short
+  }
+
+  if (host_group == "Metabolites") {
+  host_mat <- metabolites
+  } else if (host_group == "Cytokines") {
+  host_mat <- cytokines
+  } else {
+  host_mat <- gestational_age
+  }
+
+  common_ids <- Reduce(
+    intersect,
+    list(
+      rownames(taxa_mat),
+      rownames(host_mat),
+      meta$reads_ID
+    )
+  )
+
+  meta_use <- meta[match(common_ids, meta$reads_ID), ]
+
+  df <- data.frame(
+    sample_id = common_ids,
+    sample_label = meta_use$sample_label,
+    taxon_value = taxa_mat[common_ids, taxon],
+    host_value = host_mat[common_ids, host_feature],
+    outcome = meta_use$outcome,
+    sPTB34 = meta_use$sPTB34
+  ) %>%
+    filter(
+      is.finite(taxon_value),
+      is.finite(host_value),
+      !is.na(outcome)
+    ) %>%
+    mutate(
+      delivery_group = case_when(
+        outcome == "TERM" ~ "TERM",
+        outcome == "sPTB" & sPTB34 == "no" ~ "sPTB 34-37",
+        outcome == "sPTB" & sPTB34 == "yes" ~ "sPTB <34",
+        TRUE ~ NA_character_
+      ),
+      delivery_group = factor(
+        delivery_group,
+        levels = c("TERM", "sPTB 34-37", "sPTB <34")
+      )
+    )
+
+  stats_row <- all_results %>%
+    filter(
+      taxa_group == !!taxa_group,
+      host_group == !!host_group,
+      taxon == !!taxon,
+      host_feature == !!host_feature
+    ) %>%
+    slice(1)
+
+display_host_feature <- ifelse(
+  host_feature %in% names(display_labels),
+  display_labels[[host_feature]],
+  host_feature
+)
+
+figure_title <- paste(
+  taxon,
+  "vs",
+  display_host_feature
+)
+
+x_axis_label <- paste(
+  "Log-transformed",
+  taxon,
+  "abundance"
+)
+
+if (host_group == "Metabolites") {
+
+  y_axis_label <- paste(
+    "Scaled",
+    display_host_feature,
+    "concentration"
+  )
+
+} else if (host_group == "Cytokines") {
+
+  y_axis_label <- paste(
+    "Scaled",
+    display_host_feature,
+    "concentration"
+  )
+
+} else {
+
+  y_axis_label <- "Gestational age at delivery (days)"
+}
+
+  label_text <- paste0(
+    "Spearman rho = ", round(stats_row$spearman_rho, 2),
+    ", q = ", signif(stats_row$spearman_q, 2),
+    ", n = ", stats_row$n
+  )
+
+  p <- ggplot(
+    df,
+    aes(
+      x = taxon_value,
+      y = host_value
+    )
+  ) +
+    geom_jitter(
+      aes(colour = delivery_group),
+      width = 0.025,
+      height = 0.025,
+      size = 1.7,
+      alpha = 0.6
+    ) +
+    geom_smooth(
+      method = "lm",
+      se = TRUE,
+      colour = "black",
+      linewidth = 0.65,
+      fill = "grey75"
+    ) +
+    annotate(
+      "text",
+      x = -Inf,
+      y = Inf,
+      label = label_text,
+      hjust = -0.04,
+      vjust = 1.4,
+      size = 3.2
+    ) +
+    scale_colour_manual(
+      values = c(
+        "TERM" = "#1f77b4",
+        "sPTB 34-37" = "#9467bd",
+        "sPTB <34" = "#ff7f0e"
+      ),
+      na.value = "grey60"
+    ) +
+    labs(
+    title = figure_title,
+    x = x_axis_label,
+    y = y_axis_label,
+    colour = "Delivery group"
+    ) +
+    theme_bw(base_size = 11) +
+    theme(
+      plot.title = element_text(face = "bold", hjust = 0.5, size = 12),
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_line(linewidth = 0.25, colour = "grey90"),
+      axis.title = element_text(size = 10),
+      axis.text = element_text(size = 9),
+      legend.title = element_text(size = 9),
+      legend.text = element_text(size = 8)
+    )
+
+  file_safe_taxon <- gsub("[^A-Za-z0-9_]", "_", taxon)
+  file_safe_host <- gsub("[^A-Za-z0-9_]", "_", host_feature)
+
+  ggsave(
+    filename = file.path(
+      focused_plot_dir,
+      paste0(
+        taxa_group,
+        "_",
+        host_group,
+        "_",
+        file_safe_taxon,
+        "_vs_",
+        file_safe_host,
+        ".pdf"
+      )
+    ),
+    plot = p,
+    width = 5.5,
+    height = 4.5
+  )
+
+  ggsave(
+    filename = file.path(
+      focused_plot_dir,
+      paste0(
+        taxa_group,
+        "_",
+        host_group,
+        "_",
+        file_safe_taxon,
+        "_vs_",
+        file_safe_host,
+        ".png"
+      )
+    ),
+    plot = p,
+    width = 5.5,
+    height = 4.5,
+    dpi = 300
+  )
+
+  return(p)
+}
+
+# -----------------------------
+# Generate focused plots only
+# -----------------------------
+
+focused_plots <- pmap(
+  focused_hits %>%
+    select(taxa_group, host_group, taxon, host_feature, figure_reason),
+  make_clean_focused_plot
+)
+
+write.csv(
+  focused_hits,
+  file.path(focused_plot_dir, "focused_plot_selection_table.csv"),
+  row.names = FALSE
+)
+
+message("Focused PTB-guided thesis plots saved to: ", focused_plot_dir)
+```
+
+```{r}
+table(meta$CL_less24_atanyvisit, useNA = "ifany")
+table(meta$CL_less24_atTHISvisit, useNA = "ifany")
+
+summary(as.numeric(meta$Cervical_length_mean))
+sum(!is.na(as.numeric(meta$Cervical_length_mean)))
+```
+
